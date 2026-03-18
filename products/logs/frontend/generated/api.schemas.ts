@@ -152,15 +152,20 @@ export const LogsAlertConfigurationStateEnumApi = {
 } as const
 
 export interface LogsAlertConfigurationApi {
+    /** Unique identifier for this alert. */
     readonly id: string
-    /** @maxLength 255 */
+    /**
+     * Human-readable name for this alert.
+     * @maxLength 255
+     */
     name: string
+    /** Whether the alert is actively being evaluated. Disabling resets the state to not_firing. */
     enabled?: boolean
     /** Filter criteria — subset of LogsViewerFilters. Must contain at least one of: severityLevels (list of severity strings), serviceNames (list of service name strings), or filterGroup (property filter group object). */
     filters: unknown
     /**
+     * Number of matching log entries that constitutes a threshold breach within the evaluation window.
      * @minimum 1
-     * @maximum 2147483647
      */
     threshold_count: number
     /** Whether the alert fires when the count is above or below the threshold.
@@ -168,12 +173,17 @@ export interface LogsAlertConfigurationApi {
 * `above` - Above
 * `below` - Below */
     threshold_operator?: ThresholdOperatorEnumApi
-    /**
-     * @minimum 0
-     * @maximum 2147483647
-     */
+    /** Time window in minutes over which log entries are counted. Allowed values: 1, 5, 10, 15, 30, 60. */
     window_minutes?: number
+    /** How often the alert is evaluated, in minutes. Server-managed. */
     readonly check_interval_minutes: number
+    /** Current alert state: not_firing, firing, pending_resolve, errored, or snoozed. Server-managed.
+
+* `not_firing` - Not firing
+* `firing` - Firing
+* `pending_resolve` - Pending resolve
+* `errored` - Errored
+* `snoozed` - Snoozed */
     readonly state: LogsAlertConfigurationStateEnumApi
     /**
      * Total number of check periods in the sliding evaluation window for firing (M in N-of-M).
@@ -188,23 +198,28 @@ export interface LogsAlertConfigurationApi {
      */
     datapoints_to_alarm?: number
     /**
+     * Minimum minutes between repeated notifications after the alert fires. 0 means no cooldown.
      * @minimum 0
-     * @maximum 2147483647
      */
     cooldown_minutes?: number
-    /** @nullable */
+    /**
+     * ISO 8601 timestamp until which the alert is snoozed. Set to null to unsnooze.
+     * @nullable
+     */
     snooze_until?: string | null
-    /** @nullable */
-    readonly next_check_at: string | null
-    /** @nullable */
-    readonly last_notified_at: string | null
-    /** @nullable */
-    readonly last_checked_at: string | null
+    /** When the next evaluation is scheduled. Server-managed. */
+    readonly next_check_at: string
+    /** When the last notification was sent. Server-managed. */
+    readonly last_notified_at: string
+    /** When the alert was last evaluated. Server-managed. */
+    readonly last_checked_at: string
+    /** Number of consecutive evaluation failures. Resets on success. Server-managed. */
     readonly consecutive_failures: number
+    /** When the alert was created. */
     readonly created_at: string
     readonly created_by: UserBasicApi
-    /** @nullable */
-    readonly updated_at: string | null
+    /** When the alert was last modified. */
+    readonly updated_at: string
 }
 
 export interface PaginatedLogsAlertConfigurationListApi {
@@ -217,15 +232,20 @@ export interface PaginatedLogsAlertConfigurationListApi {
 }
 
 export interface PatchedLogsAlertConfigurationApi {
+    /** Unique identifier for this alert. */
     readonly id?: string
-    /** @maxLength 255 */
+    /**
+     * Human-readable name for this alert.
+     * @maxLength 255
+     */
     name?: string
+    /** Whether the alert is actively being evaluated. Disabling resets the state to not_firing. */
     enabled?: boolean
     /** Filter criteria — subset of LogsViewerFilters. Must contain at least one of: severityLevels (list of severity strings), serviceNames (list of service name strings), or filterGroup (property filter group object). */
     filters?: unknown
     /**
+     * Number of matching log entries that constitutes a threshold breach within the evaluation window.
      * @minimum 1
-     * @maximum 2147483647
      */
     threshold_count?: number
     /** Whether the alert fires when the count is above or below the threshold.
@@ -233,12 +253,17 @@ export interface PatchedLogsAlertConfigurationApi {
 * `above` - Above
 * `below` - Below */
     threshold_operator?: ThresholdOperatorEnumApi
-    /**
-     * @minimum 0
-     * @maximum 2147483647
-     */
+    /** Time window in minutes over which log entries are counted. Allowed values: 1, 5, 10, 15, 30, 60. */
     window_minutes?: number
+    /** How often the alert is evaluated, in minutes. Server-managed. */
     readonly check_interval_minutes?: number
+    /** Current alert state: not_firing, firing, pending_resolve, errored, or snoozed. Server-managed.
+
+* `not_firing` - Not firing
+* `firing` - Firing
+* `pending_resolve` - Pending resolve
+* `errored` - Errored
+* `snoozed` - Snoozed */
     readonly state?: LogsAlertConfigurationStateEnumApi
     /**
      * Total number of check periods in the sliding evaluation window for firing (M in N-of-M).
@@ -253,23 +278,96 @@ export interface PatchedLogsAlertConfigurationApi {
      */
     datapoints_to_alarm?: number
     /**
+     * Minimum minutes between repeated notifications after the alert fires. 0 means no cooldown.
      * @minimum 0
-     * @maximum 2147483647
      */
     cooldown_minutes?: number
-    /** @nullable */
+    /**
+     * ISO 8601 timestamp until which the alert is snoozed. Set to null to unsnooze.
+     * @nullable
+     */
     snooze_until?: string | null
-    /** @nullable */
-    readonly next_check_at?: string | null
-    /** @nullable */
-    readonly last_notified_at?: string | null
-    /** @nullable */
-    readonly last_checked_at?: string | null
+    /** When the next evaluation is scheduled. Server-managed. */
+    readonly next_check_at?: string
+    /** When the last notification was sent. Server-managed. */
+    readonly last_notified_at?: string
+    /** When the alert was last evaluated. Server-managed. */
+    readonly last_checked_at?: string
+    /** Number of consecutive evaluation failures. Resets on success. Server-managed. */
     readonly consecutive_failures?: number
+    /** When the alert was created. */
     readonly created_at?: string
     readonly created_by?: UserBasicApi
+    /** When the alert was last modified. */
+    readonly updated_at?: string
+}
+
+export interface DateRangeApi {
     /** @nullable */
-    readonly updated_at?: string | null
+    date_from?: string | null
+    /** @nullable */
+    date_to?: string | null
+    /**
+     * Whether the date_from and date_to should be used verbatim. Disables rounding to the start and end of period.
+     * @nullable
+     */
+    explicitDate?: boolean | null
+}
+
+/**
+ * * `trace` - trace
+ * `debug` - debug
+ * `info` - info
+ * `warn` - warn
+ * `error` - error
+ * `fatal` - fatal
+ */
+export type SeverityLevelsEnumApi = (typeof SeverityLevelsEnumApi)[keyof typeof SeverityLevelsEnumApi]
+
+export const SeverityLevelsEnumApi = {
+    Trace: 'trace',
+    Debug: 'debug',
+    Info: 'info',
+    Warn: 'warn',
+    Error: 'error',
+    Fatal: 'fatal',
+} as const
+
+/**
+ * * `severity` - severity
+ * `service` - service
+ */
+export type SparklineBreakdownByEnumApi = (typeof SparklineBreakdownByEnumApi)[keyof typeof SparklineBreakdownByEnumApi]
+
+export const SparklineBreakdownByEnumApi = {
+    Severity: 'severity',
+    Service: 'service',
+} as const
+
+export interface SparklineQueryApi {
+    /** Date range for the sparkline query. */
+    dateRange: DateRangeApi
+    /** Filter by severity levels (trace, debug, info, warn, error, fatal). */
+    severityLevels?: SeverityLevelsEnumApi[]
+    /** Filter by service names. */
+    serviceNames?: string[]
+    /**
+     * Free text search term to filter log entries.
+     * @nullable
+     */
+    searchTerm?: string | null
+    /** Property filter group object for structured filtering. */
+    filterGroup?: unknown | null
+    /** Break down sparkline data by severity level or service name (default: severity).
+
+* `severity` - severity
+* `service` - service */
+    sparklineBreakdownBy?: SparklineBreakdownByEnumApi | NullEnumApi | null
+}
+
+export interface SparklineRequestApi {
+    /** Sparkline query parameters. */
+    query: SparklineQueryApi
 }
 
 export interface LogsAlertSimulateRequestApi {

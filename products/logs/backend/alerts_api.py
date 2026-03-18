@@ -45,16 +45,45 @@ def _any_field_changed(instance: LogsAlertConfiguration, validated_data: dict, f
 
 
 class LogsAlertConfigurationSerializer(serializers.ModelSerializer):
+    id = serializers.UUIDField(
+        read_only=True,
+        help_text="Unique identifier for this alert.",
+    )
     created_by = UserBasicSerializer(read_only=True)
+    name = serializers.CharField(
+        max_length=255,
+        help_text="Human-readable name for this alert.",
+    )
+    enabled = serializers.BooleanField(
+        default=True,
+        help_text="Whether the alert is actively being evaluated. Disabling resets the state to not_firing.",
+    )
     filters = serializers.JSONField(
         help_text="Filter criteria — subset of LogsViewerFilters. Must contain at least one of: "
         "severityLevels (list of severity strings), serviceNames (list of service name strings), "
         "or filterGroup (property filter group object)."
     )
+    threshold_count = serializers.IntegerField(
+        min_value=1,
+        help_text="Number of matching log entries that constitutes a threshold breach within the evaluation window.",
+    )
     threshold_operator = serializers.ChoiceField(
         choices=LogsAlertConfiguration.ThresholdOperator.choices,
         default=LogsAlertConfiguration.ThresholdOperator.ABOVE,
         help_text="Whether the alert fires when the count is above or below the threshold.",
+    )
+    window_minutes = serializers.IntegerField(
+        default=5,
+        help_text="Time window in minutes over which log entries are counted. Allowed values: 1, 5, 10, 15, 30, 60.",
+    )
+    check_interval_minutes = serializers.IntegerField(
+        read_only=True,
+        help_text="How often the alert is evaluated, in minutes. Server-managed.",
+    )
+    state = serializers.ChoiceField(
+        choices=LogsAlertConfiguration.State.choices,
+        read_only=True,
+        help_text="Current alert state: not_firing, firing, pending_resolve, errored, or snoozed. Server-managed.",
     )
     evaluation_periods = serializers.IntegerField(
         default=1,
@@ -67,6 +96,40 @@ class LogsAlertConfigurationSerializer(serializers.ModelSerializer):
         min_value=1,
         max_value=10,
         help_text="How many periods within the evaluation window must breach the threshold to fire (N in N-of-M).",
+    )
+    cooldown_minutes = serializers.IntegerField(
+        default=0,
+        min_value=0,
+        help_text="Minimum minutes between repeated notifications after the alert fires. 0 means no cooldown.",
+    )
+    snooze_until = serializers.DateTimeField(
+        required=False,
+        allow_null=True,
+        help_text="ISO 8601 timestamp until which the alert is snoozed. Set to null to unsnooze.",
+    )
+    next_check_at = serializers.DateTimeField(
+        read_only=True,
+        help_text="When the next evaluation is scheduled. Server-managed.",
+    )
+    last_notified_at = serializers.DateTimeField(
+        read_only=True,
+        help_text="When the last notification was sent. Server-managed.",
+    )
+    last_checked_at = serializers.DateTimeField(
+        read_only=True,
+        help_text="When the alert was last evaluated. Server-managed.",
+    )
+    consecutive_failures = serializers.IntegerField(
+        read_only=True,
+        help_text="Number of consecutive evaluation failures. Resets on success. Server-managed.",
+    )
+    created_at = serializers.DateTimeField(
+        read_only=True,
+        help_text="When the alert was created.",
+    )
+    updated_at = serializers.DateTimeField(
+        read_only=True,
+        help_text="When the alert was last modified.",
     )
 
     class Meta:
