@@ -24,6 +24,7 @@ Schema reference for PostHog's core system models, organized by domain:
 - [Error Tracking](./references/models-error-tracking.md)
 - [Flags & Experiments](./references/models-flags-experiments.md)
 - [Hog Flows](./references/models-hog-flows.md)
+- [Logs Alerts](./references/models-logs-alerts.md)
 - [Hog Functions](./references/models-hog-functions.md)
 - [Integrations](./references/models-integrations.md)
 - [Logs](./references/models-logs.md)

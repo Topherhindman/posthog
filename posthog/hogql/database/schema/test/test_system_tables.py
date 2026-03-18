@@ -41,6 +41,7 @@ from products.endpoints.backend.models import Endpoint, EndpointVersion
 from products.error_tracking.backend.models import ErrorTrackingIssue
 from products.experiments.backend.models.experiment import Experiment
 from products.logs.backend.models import LogsAlertConfiguration, LogsView
+from products.logs.backend.models import LogsAlertConfiguration
 from products.notebooks.backend.models import Notebook
 from products.surveys.backend.models import Survey
 
