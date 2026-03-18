@@ -47,6 +47,7 @@ export const GENERATED_TOOL_MAP: Record<string, () => ToolBase<ZodObjectAny>> = 
     ...integrations,
     ...llm_analytics,
     ...logs,
+    ...logs,
     ...notebooks,
     ...persons,
     ...platform_features,
