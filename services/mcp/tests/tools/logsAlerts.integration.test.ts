@@ -52,9 +52,9 @@ describe('Logs Alerts', { concurrent: false }, () => {
         const flag = flags.find((f: any) => f.key === 'logs-alerting')
 
         if (flag && !flag.active) {
-            await updateFlag.handler(context, { id: flag.id, active: true })
+            const updateResult = await updateFlag.handler(context, { id: flag.id, active: true })
         } else if (!flag) {
-            await createFlag.handler(context, {
+            const createResult = await createFlag.handler(context, {
                 key: 'logs-alerting',
                 name: 'Logs alerting',
                 active: true,
