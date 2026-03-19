@@ -2159,21 +2159,6 @@
             "readOnlyHint": false
         }
     },
-    "logs-sparkline-create": {
-        "description": "Get a sparkline visualization of log volume over time. Returns bucketed log counts broken down by severity level or service name. Useful for understanding log patterns and identifying spikes in errors or activity.",
-        "category": "Logs",
-        "feature": "logs",
-        "summary": "Logs sparkline",
-        "title": "Logs sparkline",
-        "required_scopes": ["logs:read"],
-        "new_mcp": true,
-        "annotations": {
-            "destructiveHint": false,
-            "idempotentHint": true,
-            "openWorldHint": true,
-            "readOnlyHint": true
-        }
-    },
     "notebooks-list": {
         "description": "List all notebooks in the project. Supports filtering by search term, created_by, last_modified_by, date_from, date_to, and contains. Returns title, short_id, and creation/modification metadata.",
         "category": "Notebooks",

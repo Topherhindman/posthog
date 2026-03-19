@@ -3,7 +3,7 @@
  * MCP service uses these Zod schemas for generated tool handlers.
  * To regenerate: hogli build:openapi
  *
- * PostHog API - MCP 6 enabled ops
+ * PostHog API - MCP 5 enabled ops
  * OpenAPI spec version: 1.0.0
  */
 import * as zod from 'zod'
@@ -186,55 +186,4 @@ export const LogsAlertsDestroyParams = /* @__PURE__ */ zod.object({
         .describe(
             "Project ID of the project you're trying to access. To find the ID of the project, make a call to /api/projects/."
         ),
-})
-
-export const LogsSparklineCreateParams = /* @__PURE__ */ zod.object({
-    project_id: zod
-        .string()
-        .describe(
-            "Project ID of the project you're trying to access. To find the ID of the project, make a call to /api/projects/."
-        ),
-})
-
-export const logsSparklineCreateBodyQueryOneDateRangeOneExplicitDateDefault = false
-
-export const LogsSparklineCreateBody = /* @__PURE__ */ zod.object({
-    query: zod
-        .object({
-            dateRange: zod
-                .object({
-                    date_from: zod.string().nullish(),
-                    date_to: zod.string().nullish(),
-                    explicitDate: zod
-                        .boolean()
-                        .default(logsSparklineCreateBodyQueryOneDateRangeOneExplicitDateDefault)
-                        .describe(
-                            'Whether the date_from and date_to should be used verbatim. Disables rounding to the start and end of period.'
-                        ),
-                })
-                .describe('Date range for the sparkline query.'),
-            severityLevels: zod
-                .array(
-                    zod
-                        .enum(['trace', 'debug', 'info', 'warn', 'error', 'fatal'])
-                        .describe(
-                            '* `trace` - trace\n* `debug` - debug\n* `info` - info\n* `warn` - warn\n* `error` - error\n* `fatal` - fatal'
-                        )
-                )
-                .optional()
-                .describe('Filter by severity levels (trace, debug, info, warn, error, fatal).'),
-            serviceNames: zod.array(zod.string()).optional().describe('Filter by service names.'),
-            searchTerm: zod.string().nullish().describe('Free text search term to filter log entries.'),
-            filterGroup: zod.unknown().nullish().describe('Property filter group object for structured filtering.'),
-            sparklineBreakdownBy: zod
-                .union([
-                    zod.enum(['severity', 'service']).describe('* `severity` - severity\n* `service` - service'),
-                    zod.literal(null),
-                ])
-                .nullish()
-                .describe(
-                    'Break down sparkline data by severity level or service name (default: severity).\n\n* `severity` - severity\n* `service` - service'
-                ),
-        })
-        .describe('Sparkline query parameters.'),
 })
