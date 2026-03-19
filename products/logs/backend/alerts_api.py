@@ -109,14 +109,17 @@ class LogsAlertConfigurationSerializer(serializers.ModelSerializer):
     )
     next_check_at = serializers.DateTimeField(
         read_only=True,
+        allow_null=True,
         help_text="When the next evaluation is scheduled. Server-managed.",
     )
     last_notified_at = serializers.DateTimeField(
         read_only=True,
+        allow_null=True,
         help_text="When the last notification was sent. Server-managed.",
     )
     last_checked_at = serializers.DateTimeField(
         read_only=True,
+        allow_null=True,
         help_text="When the alert was last evaluated. Server-managed.",
     )
     consecutive_failures = serializers.IntegerField(
@@ -129,6 +132,7 @@ class LogsAlertConfigurationSerializer(serializers.ModelSerializer):
     )
     updated_at = serializers.DateTimeField(
         read_only=True,
+        allow_null=True,
         help_text="When the alert was last modified.",
     )
 

@@ -19080,19 +19080,31 @@ export namespace Schemas {
        * @nullable
        */
       snooze_until?: string | null;
-      /** When the next evaluation is scheduled. Server-managed. */
-      readonly next_check_at: string;
-      /** When the last notification was sent. Server-managed. */
-      readonly last_notified_at: string;
-      /** When the alert was last evaluated. Server-managed. */
-      readonly last_checked_at: string;
+      /**
+       * When the next evaluation is scheduled. Server-managed.
+       * @nullable
+       */
+      readonly next_check_at: string | null;
+      /**
+       * When the last notification was sent. Server-managed.
+       * @nullable
+       */
+      readonly last_notified_at: string | null;
+      /**
+       * When the alert was last evaluated. Server-managed.
+       * @nullable
+       */
+      readonly last_checked_at: string | null;
       /** Number of consecutive evaluation failures. Resets on success. Server-managed. */
       readonly consecutive_failures: number;
       /** When the alert was created. */
       readonly created_at: string;
       readonly created_by: UserBasic;
-      /** When the alert was last modified. */
-      readonly updated_at: string;
+      /**
+       * When the alert was last modified.
+       * @nullable
+       */
+      readonly updated_at: string | null;
     }
 
     export interface LogsAlertSimulateBucket {
@@ -24667,19 +24679,31 @@ export namespace Schemas {
        * @nullable
        */
       snooze_until?: string | null;
-      /** When the next evaluation is scheduled. Server-managed. */
-      readonly next_check_at?: string;
-      /** When the last notification was sent. Server-managed. */
-      readonly last_notified_at?: string;
-      /** When the alert was last evaluated. Server-managed. */
-      readonly last_checked_at?: string;
+      /**
+       * When the next evaluation is scheduled. Server-managed.
+       * @nullable
+       */
+      readonly next_check_at?: string | null;
+      /**
+       * When the last notification was sent. Server-managed.
+       * @nullable
+       */
+      readonly last_notified_at?: string | null;
+      /**
+       * When the alert was last evaluated. Server-managed.
+       * @nullable
+       */
+      readonly last_checked_at?: string | null;
       /** Number of consecutive evaluation failures. Resets on success. Server-managed. */
       readonly consecutive_failures?: number;
       /** When the alert was created. */
       readonly created_at?: string;
       readonly created_by?: UserBasic;
-      /** When the alert was last modified. */
-      readonly updated_at?: string;
+      /**
+       * When the alert was last modified.
+       * @nullable
+       */
+      readonly updated_at?: string | null;
     }
 
     /**
