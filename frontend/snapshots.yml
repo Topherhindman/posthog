@@ -5744,6 +5744,10 @@ snapshots:
         hash: v1.k794b7964.3a3874d1b09b3cfda9a6b2c31614c33c6b9dfd8ecb83ba501a5ed3f372a56ea9.XxF7t-2d8ZqMpP1ijBiz8uXefxN_Itz7o2Om6oBC6vg
     scenes-app-settings-user--settings-user-profile--light:
         hash: v1.k794b7964.7519c9a102b3970ad435c386104fd9bc0934bddde707f75e5b911dd227ed59c6.I11oxzvekkNNAUIuyf1Tp-bwc5nXYkzezOUYtxa0ORk
+    scenes-app-sidepanels--side-panel-access-control--dark:
+        hash: v1.k794b7964.c9a015cb8ee5ab0f956d5336e20750c1ead9f17112992ebdab792ca13eae2ef6.aNP_yr3esDw55AXwc_MszgtAsHD_Q1E8i-jVZypkw18
+    scenes-app-sidepanels--side-panel-access-control--light:
+        hash: v1.k794b7964.8e87fdeb65d8d76cb3ea1c34ebb5ed8364070e46943053e30d0bac5c82b72cce.11dHIzTG4VqFrZRdVow84b9Q3-XHmxmI-e7DbREgBgQ
     scenes-app-sidepanels--side-panel-activity--dark:
         hash: v1.k794b7964.7d20ed837f40eee2532fee1396f569bafd73a7c47c004e07319ff1bf1eb9a3af.tueE6RbIw4NBfYRfn0x3w61BvmT1eq2NypFydT245TA
     scenes-app-sidepanels--side-panel-activity--light:
