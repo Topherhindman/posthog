@@ -10,6 +10,7 @@ import {
     CyclotronJobInvocationHogFunction,
     CyclotronJobInvocationResult,
     CyclotronJobQueueKind,
+    CyclotronJobQueueSource,
 } from '../types'
 import { isLegacyPluginHogFunction, isNativeHogFunction, isSegmentPluginHogFunction } from '../utils'
 import { CdpConsumerBase, CdpConsumerBaseDeps } from './cdp-base.consumer'
@@ -166,9 +167,9 @@ export class CdpCyclotronWorker<
         await this.cyclotronJobQueue.queueInvocationResults(invocations)
     }
 
-    public async start() {
+    public async start(consumerModeOverride?: CyclotronJobQueueSource) {
         await super.start()
-        await this.cyclotronJobQueue.start(this.queue, (batch) => this.processBatch(batch))
+        await this.cyclotronJobQueue.start(this.queue, (batch) => this.processBatch(batch), consumerModeOverride)
     }
 
     public async stop() {
