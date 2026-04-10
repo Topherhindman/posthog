@@ -466,45 +466,160 @@ def send_batch_export_run_failure(
     message.send()
 
 
-def send_saved_query_materialization_failure(saved_query_id: str) -> None:
-    """Send email notification when a materialized view sync fails."""
-    from products.data_warehouse.backend.models import DataWarehouseSavedQuery
+@shared_task(ignore_result=True)
+def send_matview_failure_digest() -> None:
+    from products.data_warehouse.backend.models import DataModelingJob, DataWarehouseSavedQuery
 
     if not is_email_available(with_absolute_urls=True):
-        logger.warning("Email service is not available for materialization failure notification")
+        logger.warning("Email service is not available for materialized view digest")
+        return
+
+    cutoff = timezone.now() - datetime.timedelta(hours=24)
+
+    # Latest DataModelingJob is the failure source of truth — v2 MaterializeViewWorkflow doesn't update SavedQuery.status.
+    latest_job = DataModelingJob.objects.filter(
+        saved_query_id=OuterRef("id"),
+    ).order_by("-last_run_at")
+
+    failed_queries = (
+        DataWarehouseSavedQuery.objects.filter(deleted=False, sync_frequency_interval__isnull=False)
+        .annotate(
+            latest_job_status=Subquery(latest_job.values("status")[:1]),
+            latest_job_run_at=Subquery(latest_job.values("last_run_at")[:1]),
+        )
+        .filter(
+            latest_job_status=DataModelingJob.Status.FAILED,
+            latest_job_run_at__gte=cutoff,
+        )
+        .select_related("team")
+    )
+
+    # Recent-run cutoff avoids nagging about long-term pauses.
+    paused_queries = (
+        DataWarehouseSavedQuery.objects.filter(
+            deleted=False,
+            sync_frequency_interval__isnull=True,
+            latest_error__isnull=False,
+        )
+        .annotate(latest_job_run_at=Subquery(latest_job.values("last_run_at")[:1]))
+        .filter(latest_job_run_at__gte=cutoff)
+        .select_related("team")
+    )
+
+    teams_with_issues: dict[int, dict] = {}
+
+    for sq in failed_queries:
+        entry = teams_with_issues.setdefault(sq.team_id, {"team": sq.team, "failed": [], "paused": []})
+        entry["failed"].append(sq)
+
+    for paused_sq in paused_queries:
+        entry = teams_with_issues.setdefault(paused_sq.team_id, {"team": paused_sq.team, "failed": [], "paused": []})
+        entry["paused"].append(paused_sq)
+
+    if not teams_with_issues:
+        logger.warning("No matview failures or paused schedules found")
+        return
+
+    logger.info("Found %d teams with matview issues", len(teams_with_issues))
+
+    for team_id, data in teams_with_issues.items():
+        failed_ids = [str(sq.id) for sq in data["failed"]]
+        paused_ids = [str(sq.id) for sq in data["paused"]]
+        send_team_matview_failure_digest.delay(team_id, failed_ids, paused_ids)
+        logger.info(
+            f"Dispatching matview failure digest for team {team_id} with {len(failed_ids)} failed and {len(paused_ids)} paused."
+        )
+
+    logger.info("Completed materialized view failure digest fan-out")
+
+
+@shared_task(**EMAIL_TASK_KWARGS)
+def send_team_matview_failure_digest(team_id: int, failed_query_ids: list[str], paused_query_ids: list[str]) -> None:
+    from products.data_warehouse.backend.models import DataModelingJob, DataWarehouseSavedQuery
+
+    if not is_email_available(with_absolute_urls=True):
         return
 
     try:
-        saved_query = DataWarehouseSavedQuery.objects.select_related("team").get(id=saved_query_id)
-    except DataWarehouseSavedQuery.DoesNotExist:
-        logger.warning("Saved query %s not found for materialization failure notification", saved_query_id)
+        team = Team.objects.get(id=team_id)
+    except Team.DoesNotExist:
+        logger.warning("Team %d not found for matview failure digest", team_id)
         return
-
-    team: Team = saved_query.team
 
     memberships_to_email = get_members_to_notify(team, NotificationSetting.MATERIALIZED_VIEW_SYNC_FAILED.value)
     if not memberships_to_email:
         return
 
-    logger.info("Preparing materialization failure notification email for saved query %s", saved_query_id)
+    all_ids = list(set(failed_query_ids + paused_query_ids))
+    queries = {str(sq.id): sq for sq in DataWarehouseSavedQuery.objects.filter(id__in=all_ids, team_id=team_id)}
+
+    latest_jobs: dict[str, DataModelingJob] = {}
+    for job in (
+        DataModelingJob.objects.filter(saved_query_id__in=all_ids)
+        .order_by("saved_query_id", "-last_run_at")
+        .distinct("saved_query_id")
+    ):
+        latest_jobs[str(job.saved_query_id)] = job
+
+    failed_views = []
+    for qid in failed_query_ids:
+        sq = queries.get(qid)
+        if sq:
+            failed_job = latest_jobs.get(qid)
+            error = (failed_job.error if failed_job else None) or sq.latest_error or "Unknown error"
+            run_at = (failed_job.last_run_at if failed_job else None) or sq.last_run_at
+            failed_views.append(
+                {
+                    "id": str(sq.id),
+                    "name": sq.name,
+                    "error": error,
+                    "last_run_at": run_at.strftime("%b %d, %H:%M UTC") if run_at else "Unknown",
+                    "url": f"{settings.SITE_URL}/project/{team_id}/sql?open_view={sq.id}",
+                }
+            )
+
+    paused_views = []
+    for qid in paused_query_ids:
+        sq = queries.get(qid)
+        if sq:
+            paused_views.append(
+                {
+                    "id": str(sq.id),
+                    "name": sq.name,
+                    "error": sq.latest_error or "Paused due to repeated failures",
+                    "url": f"{settings.SITE_URL}/project/{team_id}/sql?open_view={sq.id}",
+                }
+            )
+
+    if not failed_views and not paused_views:
+        logger.warning("No failed or paused views found")
+        return
 
     today = datetime.date.today().strftime("%Y-%m-%d")
-    campaign_key = f"saved_query_materialization_failure_{saved_query_id}_{today}"
+    campaign_key = f"matview_failure_digest_{team_id}_{today}"
 
     message = EmailMessage(
         campaign_key=campaign_key,
-        subject=f"PostHog: Materialized view '{saved_query.name}' sync failed",
-        template_name="saved_query_materialization_failure",
+        subject=f"PostHog: Materialized view failures in {team.name}",
+        template_name="matview_failure_digest",
         template_context={
             "team": team,
-            "saved_query_id": str(saved_query.id),
-            "saved_query_name": saved_query.name,
+            "failed_views": failed_views,
+            "paused_views": paused_views,
+            "site_url": settings.SITE_URL,
         },
     )
 
     for membership in memberships_to_email:
         message.add_user_recipient(membership.user)
     message.send()
+
+    logger.info(
+        "Sent materialized view failure digest email for team %d: %d failed, %d paused",
+        team_id,
+        len(failed_views),
+        len(paused_views),
+    )
 
 
 @shared_task(**EMAIL_TASK_KWARGS)

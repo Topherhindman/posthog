@@ -31,11 +31,10 @@ from posthog.tasks.email import (
     send_hog_functions_daily_digest,
     send_hog_functions_digest_email,
     send_invite,
+    send_matview_failure_digest,
     send_member_join,
     send_new_ticket_notification,
     send_password_reset,
-    send_saved_query_materialization_failure,
-    should_send_notification,
     should_send_pipeline_error_notification,
 )
 from posthog.tasks.test.utils_email_tests import mock_email_messages
@@ -1284,8 +1283,8 @@ class TestEmail(APIBaseTest, ClickhouseTestMixin):
         # Verify the href falls back to base URL with discussion panel
         assert mocked_email_messages[0].properties["href"] == f"{settings.SITE_URL}#panel=discussion"
 
-    def test_send_saved_query_materialization_failure(self, MockEmailMessage: MagicMock) -> None:
-        from products.data_warehouse.backend.models import DataWarehouseSavedQuery
+    def test_send_matview_failure_digest_includes_failed_views(self, MockEmailMessage: MagicMock) -> None:
+        from products.data_warehouse.backend.models import DataModelingJob, DataWarehouseSavedQuery
 
         mocked_email_messages = mock_email_messages(MockEmailMessage)
 
@@ -1296,93 +1295,198 @@ class TestEmail(APIBaseTest, ClickhouseTestMixin):
             team=self.team,
             name="test_materialized_view",
             query={"query": "SELECT 1"},
-            status=DataWarehouseSavedQuery.Status.FAILED,
+            sync_frequency_interval=dt.timedelta(hours=1),
+        )
+        DataModelingJob.objects.create(
+            team=self.team,
+            saved_query=saved_query,
+            status=DataModelingJob.Status.FAILED,
+            error="Some error",
+            last_run_at=timezone.now() - dt.timedelta(hours=1),
         )
 
-        send_saved_query_materialization_failure(str(saved_query.id))
+        send_matview_failure_digest()
 
         assert len(mocked_email_messages) == 1
         assert mocked_email_messages[0].send.call_count == 1
         assert mocked_email_messages[0].html_body
         assert "test_materialized_view" in mocked_email_messages[0].html_body
 
-    def test_send_saved_query_materialization_failure_not_sent_by_default(self, MockEmailMessage: MagicMock) -> None:
-        from products.data_warehouse.backend.models import DataWarehouseSavedQuery
+    def test_send_matview_failure_digest_includes_newly_paused_schedules(self, MockEmailMessage: MagicMock) -> None:
+        from products.data_warehouse.backend.models import DataModelingJob, DataWarehouseSavedQuery
 
         mocked_email_messages = mock_email_messages(MockEmailMessage)
 
-        saved_query = DataWarehouseSavedQuery.objects.create(
-            team=self.team,
-            name="test_materialized_view",
-            query={"query": "SELECT 1"},
-            status=DataWarehouseSavedQuery.Status.FAILED,
-        )
-
-        send_saved_query_materialization_failure(str(saved_query.id))
-
-        assert len(mocked_email_messages) == 0
-
-    def test_send_saved_query_materialization_failure_respects_notification_settings(
-        self, MockEmailMessage: MagicMock
-    ) -> None:
-        from products.data_warehouse.backend.models import DataWarehouseSavedQuery
-
-        mocked_email_messages = mock_email_messages(MockEmailMessage)
-
-        saved_query = DataWarehouseSavedQuery.objects.create(
-            team=self.team,
-            name="test_materialized_view",
-            query={"query": "SELECT 1"},
-            status=DataWarehouseSavedQuery.Status.FAILED,
-        )
-
-        user2 = self._create_user("test2@posthog.com")
-        user2.partial_notification_settings = {"materialized_view_sync_failed": True}
-        user2.save()
-
-        send_saved_query_materialization_failure(str(saved_query.id))
-
-        # Should only be sent to user2 who has explicitly opted in
-        assert mocked_email_messages[0].to == [
-            {"recipient": "test2@posthog.com", "raw_email": "test2@posthog.com", "distinct_id": str(user2.distinct_id)}
-        ]
-
-        # Opt in self.user too
         self.user.partial_notification_settings = {"materialized_view_sync_failed": True}
         self.user.save()
 
-        send_saved_query_materialization_failure(str(saved_query.id))
+        saved_query = DataWarehouseSavedQuery.objects.create(
+            team=self.team,
+            name="paused_view",
+            query={"query": "SELECT 1"},
+            sync_frequency_interval=None,
+            latest_error="Query exceeded timeout - we limit queries to a 10-minute timeout.",
+        )
+        DataModelingJob.objects.create(
+            team=self.team,
+            saved_query=saved_query,
+            status=DataModelingJob.Status.FAILED,
+            error="Query exceeded timeout",
+            last_run_at=timezone.now() - dt.timedelta(hours=1),
+        )
 
-        # Should be sent to both users
-        assert len(mocked_email_messages[1].to) == 2
+        send_matview_failure_digest()
 
-    def test_should_send_wa_digest_notification_enabled_by_default(self, MockEmailMessage: MagicMock) -> None:
-        assert should_send_notification(self.user, "web_analytics_weekly_digest") is True
+        assert len(mocked_email_messages) == 1
+        assert mocked_email_messages[0].html_body
+        assert "paused_view" in mocked_email_messages[0].html_body
 
-    def test_should_send_wa_digest_notification_disabled(self, MockEmailMessage: MagicMock) -> None:
-        self.user.partial_notification_settings = {"web_analytics_weekly_digest": False}
+    def test_send_matview_failure_digest_skips_old_paused_schedules(self, MockEmailMessage: MagicMock) -> None:
+        from products.data_warehouse.backend.models import DataModelingJob, DataWarehouseSavedQuery
+
+        mocked_email_messages = mock_email_messages(MockEmailMessage)
+
+        self.user.partial_notification_settings = {"materialized_view_sync_failed": True}
         self.user.save()
-        assert should_send_notification(self.user, "web_analytics_weekly_digest") is False
 
-    def test_should_send_wa_digest_notification_per_project_enabled(self, MockEmailMessage: MagicMock) -> None:
-        team_id = self.team.pk
-        self.user.partial_notification_settings = {
-            "web_analytics_weekly_digest_project_enabled": {str(team_id): True},
-        }
-        self.user.save()
-        assert should_send_notification(self.user, "web_analytics_weekly_digest", team_id=team_id) is True
+        saved_query = DataWarehouseSavedQuery.objects.create(
+            team=self.team,
+            name="old_paused_view",
+            query={"query": "SELECT 1"},
+            sync_frequency_interval=None,
+            latest_error="Query exceeded timeout - we limit queries to a 10-minute timeout.",
+        )
+        DataModelingJob.objects.create(
+            team=self.team,
+            saved_query=saved_query,
+            status=DataModelingJob.Status.FAILED,
+            error="Query exceeded timeout",
+            last_run_at=timezone.now() - dt.timedelta(days=3),
+        )
 
-    def test_should_send_wa_digest_notification_per_project_disabled(self, MockEmailMessage: MagicMock) -> None:
-        team_id = self.team.pk
-        self.user.partial_notification_settings = {
-            "web_analytics_weekly_digest_project_enabled": {str(team_id): False},
-        }
-        self.user.save()
-        assert should_send_notification(self.user, "web_analytics_weekly_digest", team_id=team_id) is False
+        send_matview_failure_digest()
 
-    def test_should_send_wa_digest_notification_unknown_team_defaults_false(self, MockEmailMessage: MagicMock) -> None:
-        self.user.partial_notification_settings = {
-            "web_analytics_weekly_digest_project_enabled": {"99999": True},
-        }
+        # Paused 3 days ago, should not appear in digest
+        assert len(mocked_email_messages) == 0
+
+    def test_send_matview_failure_digest_skips_recovered_views(self, MockEmailMessage: MagicMock) -> None:
+        from products.data_warehouse.backend.models import DataModelingJob, DataWarehouseSavedQuery
+
+        mocked_email_messages = mock_email_messages(MockEmailMessage)
+
+        self.user.partial_notification_settings = {"materialized_view_sync_failed": True}
         self.user.save()
-        assert should_send_notification(self.user, "web_analytics_weekly_digest", team_id=self.team.pk) is False
+
+        saved_query = DataWarehouseSavedQuery.objects.create(
+            team=self.team,
+            name="recovered_view",
+            query={"query": "SELECT 1"},
+        )
+        # Failed 2h ago
+        DataModelingJob.objects.create(
+            team=self.team,
+            saved_query=saved_query,
+            status=DataModelingJob.Status.FAILED,
+            error="Some error",
+            last_run_at=timezone.now() - dt.timedelta(hours=2),
+        )
+        # Succeeded 1h ago (most recent)
+        DataModelingJob.objects.create(
+            team=self.team,
+            saved_query=saved_query,
+            status=DataModelingJob.Status.COMPLETED,
+            last_run_at=timezone.now() - dt.timedelta(hours=1),
+        )
+
+        send_matview_failure_digest()
+
+        # View recovered, so no digest should be sent
+        assert len(mocked_email_messages) == 0
+
+    def test_send_matview_failure_digest_not_sent_by_default(self, MockEmailMessage: MagicMock) -> None:
+        from products.data_warehouse.backend.models import DataModelingJob, DataWarehouseSavedQuery
+
+        mocked_email_messages = mock_email_messages(MockEmailMessage)
+
+        saved_query = DataWarehouseSavedQuery.objects.create(
+            team=self.team,
+            name="test_materialized_view",
+            query={"query": "SELECT 1"},
+        )
+        DataModelingJob.objects.create(
+            team=self.team,
+            saved_query=saved_query,
+            status=DataModelingJob.Status.FAILED,
+            error="Some error",
+            last_run_at=timezone.now() - dt.timedelta(hours=1),
+        )
+        send_matview_failure_digest()
+
+        assert len(mocked_email_messages) == 0
+
+    def test_send_matview_failure_digest_kitchen_sink_snapshot(self, MockEmailMessage: MagicMock) -> None:
+        from products.data_warehouse.backend.models import DataModelingJob, DataWarehouseSavedQuery
+
+        mocked_email_messages = mock_email_messages(MockEmailMessage)
+
+        self.user.partial_notification_settings = {"materialized_view_sync_failed": True}
+        self.user.save()
+
+        failed_cases = [
+            (
+                "events_by_day_rollup",
+                "Code: 241. DB::Exception: Memory limit (for query) exceeded: "
+                "would use 15.00 GiB (attempt to allocate chunk of 4194304 bytes)",
+            ),
+            (
+                "weekly_retention_matrix",
+                "Code: 43. DB::Exception: Illegal type Nullable(Float64) of argument for aggregate function sum",
+            ),
+            (
+                "signups_by_utm_source",
+                "HogQL: unknown property `utm_soruce` on table `events` — did you mean `utm_source`?",
+            ),
+        ]
+        for name, error in failed_cases:
+            sq = DataWarehouseSavedQuery.objects.create(
+                team=self.team,
+                name=name,
+                query={"query": "SELECT 1"},
+                sync_frequency_interval=dt.timedelta(hours=1),
+            )
+            DataModelingJob.objects.create(
+                team=self.team,
+                saved_query=sq,
+                status=DataModelingJob.Status.FAILED,
+                error=error,
+                last_run_at=timezone.now() - dt.timedelta(hours=1),
+            )
+
+        paused_cases = [
+            ("heavy_joins_with_warehouse", "Query timed out after 900 seconds"),
+            ("experimental_feature_funnels", "Query timed out after 900 seconds"),
+        ]
+        for name, error in paused_cases:
+            sq = DataWarehouseSavedQuery.objects.create(
+                team=self.team,
+                name=name,
+                query={"query": "SELECT 1"},
+                sync_frequency_interval=None,
+                latest_error=error,
+            )
+            DataModelingJob.objects.create(
+                team=self.team,
+                saved_query=sq,
+                status=DataModelingJob.Status.FAILED,
+                error=error,
+                last_run_at=timezone.now() - dt.timedelta(hours=1),
+            )
+
+        send_matview_failure_digest()
+
+        assert len(mocked_email_messages) == 1
+        html = mocked_email_messages[0].html_body
+        for name, _ in failed_cases + paused_cases:
+            assert name in html
+        assert "Failed syncs" in html
+        assert "Paused schedules" in html
