@@ -102,7 +102,7 @@ impl SinkEvent for WrappedEvent {
 
         h.push(("distinct_id".into(), self.event.distinct_id.clone()));
         h.push(("event".into(), self.event.event.clone()));
-        h.push(("uuid".into(), self.event.uuid.clone()));
+        h.push(("uuid".into(), self.event.uuid().to_owned()));
 
         if let Some(ts) = self.adjusted_timestamp {
             h.push(("timestamp".into(), ts.timestamp_millis().to_string()));
