@@ -308,7 +308,7 @@ async fn apply_token_distinct_id_limits(
             GlobalRateLimitKey::TokenDistinctId(&context.api_token, &event.event.distinct_id)
                 .to_cache_key();
         if limiter.is_limited(&cache_key, 1).await.is_some() {
-            event.skip_person_processing = true;
+            event.force_disable_person_processing = true;
             event.details = Some(DETAIL_RATE_LIMITED_TOKEN_DISTINCT_ID);
             limited_distinct_ids.insert(event.event.distinct_id.as_str());
         } else {
@@ -1135,7 +1135,7 @@ mod tests {
         let limited_ev = find_by_did(&events, "user-2");
         assert_eq!(limited_ev.result, EventResult::Ok);
         assert_eq!(limited_ev.destination, Destination::AnalyticsMain);
-        assert!(limited_ev.skip_person_processing);
+        assert!(limited_ev.force_disable_person_processing);
         assert_eq!(
             limited_ev.details,
             Some(DETAIL_RATE_LIMITED_TOKEN_DISTINCT_ID)
@@ -1175,7 +1175,10 @@ mod tests {
                 Destination::AnalyticsMain,
                 "should stay on main topic"
             );
-            assert!(ev.skip_person_processing, "should skip person processing");
+            assert!(
+                ev.force_disable_person_processing,
+                "should skip person processing"
+            );
             assert_eq!(
                 ev.details,
                 Some(DETAIL_RATE_LIMITED_TOKEN_DISTINCT_ID),
@@ -1205,7 +1208,7 @@ mod tests {
         let limited = find_by_did(&events, "user-2");
         assert_eq!(limited.result, EventResult::Ok);
         assert_eq!(limited.destination, Destination::AnalyticsMain);
-        assert!(limited.skip_person_processing);
+        assert!(limited.force_disable_person_processing);
         assert_eq!(limited.details, Some(DETAIL_RATE_LIMITED_TOKEN_DISTINCT_ID));
     }
 
