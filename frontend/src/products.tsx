@@ -26,6 +26,7 @@ import {
 import { isDataTableNode, isDataVisualizationNode, isHogQLQuery } from '~/queries/utils'
 
 import type { WorkflowsSceneTab } from '../../products/workflows/frontend/WorkflowsScene'
+import type { FeaturePreviewGateConfig } from './types'
 import {
     ActionType,
     ActivityScope,
@@ -884,6 +885,38 @@ export const productUrls = {
     workflowsLibraryTemplate: (id?: string): string => `/workflows/library/templates/${id}`,
     workflowsLibraryTemplateNew: (): string => '/workflows/library/templates/new',
     workflowsLibraryTemplateFromMessage: (id?: string): string => `/workflows/library/templates/new?messageId=${id}`,
+}
+
+/** This const is auto-generated, as is the whole file */
+export const productFeaturePreviewGates: Record<string, FeaturePreviewGateConfig> = {
+    CustomerAnalytics: {
+        flag: FEATURE_FLAGS.CUSTOMER_ANALYTICS,
+        title: 'Try Customer analytics',
+        description:
+            'Get context about your customers. Is the number of signups going up? Are we converting free users to paid users? Need to know what the power users of a feature are? We got you covered.',
+        docsURL: 'https://posthog.com/docs/customer-analytics',
+    },
+    CustomerAnalyticsConfiguration: {
+        flag: FEATURE_FLAGS.CUSTOMER_ANALYTICS,
+        title: 'Try Customer analytics',
+        description:
+            'Get context about your customers. Is the number of signups going up? Are we converting free users to paid users? Need to know what the power users of a feature are? We got you covered.',
+        docsURL: 'https://posthog.com/docs/customer-analytics',
+    },
+    CustomerJourneyBuilder: {
+        flag: FEATURE_FLAGS.CUSTOMER_ANALYTICS,
+        title: 'Try Customer analytics',
+        description:
+            'Get context about your customers. Is the number of signups going up? Are we converting free users to paid users? Need to know what the power users of a feature are? We got you covered.',
+        docsURL: 'https://posthog.com/docs/customer-analytics',
+    },
+    CustomerJourneyTemplates: {
+        flag: FEATURE_FLAGS.CUSTOMER_ANALYTICS,
+        title: 'Try Customer analytics',
+        description:
+            'Get context about your customers. Is the number of signups going up? Are we converting free users to paid users? Need to know what the power users of a feature are? We got you covered.',
+        docsURL: 'https://posthog.com/docs/customer-analytics',
+    },
 }
 
 /** This const is auto-generated, as is the whole file */

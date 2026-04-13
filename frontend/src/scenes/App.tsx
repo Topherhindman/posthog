@@ -25,6 +25,8 @@ import { Navigation } from '~/layout/navigation-3000/Navigation'
 import { themeLogic } from '~/layout/navigation-3000/themeLogic'
 import { breadcrumbsLogic } from '~/layout/navigation/Breadcrumbs/breadcrumbsLogic'
 import { ImpersonationNotice } from '~/layout/navigation/ImpersonationNotice'
+import { FeaturePreviewSceneGate } from '~/layout/scenes/components/FeaturePreviewSceneGate'
+import { productFeaturePreviewGates } from '~/products'
 
 import { MaxInstance } from './max/Max'
 
@@ -98,8 +100,13 @@ function AppScene(): JSX.Element | null {
         )
     }
 
+    const gateConfig = activeSceneId ? productFeaturePreviewGates[activeSceneId] : undefined
+    const isGated = gateConfig && !featureFlags[gateConfig.flag as keyof typeof featureFlags]
+
     let sceneElement: JSX.Element
-    if (activeExportedScene?.component) {
+    if (isGated) {
+        sceneElement = <FeaturePreviewSceneGate config={gateConfig} />
+    } else if (activeExportedScene?.component) {
         const { component: SceneComponent } = activeExportedScene
         sceneElement = (
             <SceneComponent

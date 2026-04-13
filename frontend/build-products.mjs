@@ -75,10 +75,12 @@ function buildProductManifests() {
     const treeItemsGames = {}
     const treeItemsMetadata = {}
     const treeItemsProducts = {}
+    const featurePreviewGates = []
 
     const visitManifests = (sourceFile) => {
         const manifestSceneKeys = [] // collect the scene keys used in this manifest file
         const manifestTreeItems = []
+        let manifestGateNode = null
         ts.forEachChild(sourceFile, function walk(node) {
             if (ts.isPropertyAssignment(node) && ts.isObjectLiteralExpression(node.initializer)) {
                 const { text: name } = node.name
@@ -90,6 +92,8 @@ function buildProductManifests() {
                 }[name]
                 if (list) {
                     node.initializer.properties.forEach((p) => list.push(cloneNode(p)))
+                } else if (name === 'featurePreviewGate') {
+                    manifestGateNode = cloneNode(node.initializer)
                 } else if (name === 'scenes') {
                     node.initializer.properties.forEach((prop) => {
                         const sceneName = prop.name?.text ?? prop.name?.escapedText
@@ -159,6 +163,17 @@ function buildProductManifests() {
                 ),
             ])
         })
+
+        if (manifestGateNode) {
+            manifestSceneKeys.forEach((key) => {
+                featurePreviewGates.push(
+                    ts.factory.createPropertyAssignment(
+                        ts.factory.createStringLiteral(key),
+                        cloneNode(manifestGateNode)
+                    )
+                )
+            })
+        }
     }
 
     for (const sf of program.getSourceFiles()) {
@@ -272,6 +287,9 @@ function buildProductManifests() {
     if (!globalNames.has('FileSystemImport')) {
         addImport('~/queries/schema/schema-general', 'typeNamed', 'FileSystemImport')
     }
+    if (!globalNames.has('FeaturePreviewGateConfig')) {
+        addImport('./types', 'typeNamed', 'FeaturePreviewGateConfig')
+    }
 
     // 5. Serialise gathered imports → valid TypeScript code
     //    (no duplicate names, type/value kept separate)
@@ -318,6 +336,7 @@ function buildProductManifests() {
     const serializedFileSystemTypes = makeObjExpr(
         fileSystemTypes.sort((a, b) => a.name.text.localeCompare(b.name.text))
     )
+    const serializedFeaturePreviewGates = makeObjExpr(featurePreviewGates)
     const serializedTreeItemsNew = makeArrExpr(treeItemsNew)
     const serializedTreeItemsProducts = makeArrExpr(treeItemsProducts)
     const serializedTreeItemsGames = makeArrExpr(treeItemsGames)
@@ -345,6 +364,9 @@ function buildProductManifests() {
 
         ${autogenDisclaimer}
         export const productUrls = ${serializedProductUrls}
+
+        ${autogenDisclaimer}
+        export const productFeaturePreviewGates: Record<string, FeaturePreviewGateConfig> = ${serializedFeaturePreviewGates}
 
         ${autogenDisclaimer}
         export const fileSystemTypes = ${serializedFileSystemTypes}

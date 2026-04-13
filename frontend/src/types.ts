@@ -6803,8 +6803,16 @@ export interface FileSystemType {
     iconColor?: FileSystemIconColor
 }
 
+export interface FeaturePreviewGateConfig {
+    flag: string
+    title: string
+    description: string
+    docsURL?: string
+}
+
 export interface ProductManifest {
     name: string
+    featurePreviewGate?: FeaturePreviewGateConfig
     scenes?: Record<string, SceneConfig>
     routes?: Record<string, [string /** Scene */, string /** Scene Key (unique for layout tabs) */]>
     redirects?: Record<string, string | ((params: Params, searchParams: Params, hashParams: Params) => string)>
