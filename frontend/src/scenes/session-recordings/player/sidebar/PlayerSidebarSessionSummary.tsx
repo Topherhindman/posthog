@@ -45,6 +45,7 @@ import {
     SessionSummaryContent,
     SummarizationProgress,
 } from '../player-meta/types'
+import { ProductContextButton } from './ProductContextButton'
 
 function formatEventMetaInfo(event: SessionKeyAction): JSX.Element {
     return (
@@ -978,6 +979,7 @@ function LoadSessionSummaryButton(): JSX.Element {
 
     return (
         <div className="space-y-2">
+            <ProductContextButton />
             <LemonButton
                 size="small"
                 type="primary"
