@@ -5409,6 +5409,9 @@ const api = {
         async list(): Promise<PaginatedResponse<IntegrationType>> {
             return await new ApiRequest().organizationIntegrations().get()
         },
+        async delete(id: IntegrationType['id']): Promise<void> {
+            await new ApiRequest().organizationIntegrations().addPathComponent(`${id}`).delete()
+        },
     },
 
     organizationOAuthApplications: {
