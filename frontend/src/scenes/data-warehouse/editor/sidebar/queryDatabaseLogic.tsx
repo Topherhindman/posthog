@@ -161,6 +161,9 @@ export type TreeDataContext = {
     allTablesMap: Record<string, DatabaseSchemaTable>
 }
 
+const DEFAULT_EXPANDED_FOLDERS = ['sources', 'views', 'managed-views'] as string[]
+const EXPANDED_FOLDERS_DEFAULT_KEY = '__default__'
+
 const normalizeTableLookupKey = (tableName?: string | null): string | null => {
     if (!tableName) {
         return null
@@ -1192,7 +1195,34 @@ export const getDefaultExpandedRootIds = (connectionId: string | null, displayed
         return []
     }
 
-    return displayedTreeData.filter((item) => item.record?.type !== 'source-folder').map((item) => item.id)
+    return displayedTreeData
+        .filter(
+            (item) =>
+                item.record?.type !== 'source-folder' ||
+                item.children?.some((child) => child.type === 'loading-indicator')
+        )
+        .map((item) => item.id)
+}
+
+const getExpandedFoldersConnectionKey = (connectionId: string | null): string =>
+    connectionId || EXPANDED_FOLDERS_DEFAULT_KEY
+
+export const getInitialExpandedFolders = (connectionId: string | null, displayedTreeData: TreeDataItem[]): string[] => {
+    if (!shouldUseDirectConnectionTree(connectionId)) {
+        return [...DEFAULT_EXPANDED_FOLDERS]
+    }
+
+    const schemaFolderIds = displayedTreeData
+        .filter((item) => item.record?.type === 'source-folder')
+        .map((item) => item.id)
+
+    return Array.from(
+        new Set([
+            ...DEFAULT_EXPANDED_FOLDERS,
+            ...getDefaultExpandedRootIds(connectionId, displayedTreeData),
+            ...schemaFolderIds,
+        ])
+    )
 }
 
 const findTreePath = (items: TreeDataItem[], targetId: string, path: TreeDataItem[] = []): TreeDataItem[] | null => {
@@ -1250,7 +1280,7 @@ export const queryDatabaseLogic = kea<queryDatabaseLogicType>([
         selectSchema: (schema: DatabaseSchemaDataWarehouseTable | DatabaseSchemaTable | DataWarehouseSavedQuery) => ({
             schema,
         }),
-        setExpandedFolders: (folderIds: string[]) => ({ folderIds }),
+        setExpandedFolders: (folderIds: string[], connectionId?: string | null) => ({ folderIds, connectionId }),
         setExpandedSearchFolders: (folderIds: string[]) => ({ folderIds }),
         toggleFolderOpen: (folderId: string, isExpanded: boolean) => ({ folderId, isExpanded }),
         setTreeRef: (ref: EditorSidebarTreeRef | null) => ({ ref }),
@@ -1338,10 +1368,14 @@ export const queryDatabaseLogic = kea<queryDatabaseLogicType>([
                 selectSchema: (_, { schema }) => schema,
             },
         ],
-        expandedFolders: [
-            ['sources', 'views', 'managed-views'] as string[], // Default expanded folders
+        expandedFoldersByConnection: [
+            {} as Record<string, string[]>,
+            { persist: true },
             {
-                setExpandedFolders: (_, { folderIds }) => folderIds,
+                setExpandedFolders: (state, { folderIds, connectionId }) => ({
+                    ...state,
+                    [getExpandedFoldersConnectionKey(connectionId ?? null)]: folderIds,
+                }),
             },
         ],
         expandedSearchFolders: [
@@ -1418,7 +1452,10 @@ export const queryDatabaseLogic = kea<queryDatabaseLogicType>([
         createDataWarehouseSavedQuerySuccess: ({ payload }) => {
             if (payload?.folder_id) {
                 const folderNodeId = `view-folder-${payload.folder_id}`
-                actions.setExpandedFolders(Array.from(new Set([...values.expandedFolders, 'views', folderNodeId])))
+                actions.setExpandedFolders(
+                    Array.from(new Set([...values.expandedFolders, 'views', folderNodeId])),
+                    values.connectionId
+                )
             }
         },
         updateDraggedViewDropTarget: ({ dropTargetId }) => {
@@ -2242,6 +2279,16 @@ export const queryDatabaseLogic = kea<queryDatabaseLogicType>([
                 return searchTerm ? expandedSearchFolders : expandedFolders
             },
         ],
+        expandedFolders: [
+            (s) => [s.connectionId, s.expandedFoldersByConnection],
+            (connectionId: string | null, expandedFoldersByConnection: Record<string, string[]>): string[] => {
+                const key = getExpandedFoldersConnectionKey(connectionId)
+
+                return Object.prototype.hasOwnProperty.call(expandedFoldersByConnection, key)
+                    ? expandedFoldersByConnection[key]
+                    : [...DEFAULT_EXPANDED_FOLDERS]
+            },
+        ],
         defaultExpandedRootIds: [
             (s) => [s.connectionId, s.displayedTreeData],
             (connectionId: string | null, displayedTreeData: TreeDataItem[]): string[] =>
@@ -2352,14 +2399,24 @@ export const queryDatabaseLogic = kea<queryDatabaseLogicType>([
         ],
     })),
     listeners(({ actions, values }) => ({
-        toggleFolderOpen: ({ folderId }) => {
+        toggleFolderOpen: ({ folderId, isExpanded }) => {
             const expandedFolders = values.searchTerm ? values.expandedSearchFolders : values.expandedFolders
-            const setExpanded = values.searchTerm ? actions.setExpandedSearchFolders : actions.setExpandedFolders
 
-            if (expandedFolders.find((f) => f === folderId)) {
-                setExpanded(expandedFolders.filter((f) => f !== folderId))
+            if (isExpanded) {
+                if (values.searchTerm) {
+                    actions.setExpandedSearchFolders(expandedFolders.filter((f) => f !== folderId))
+                } else {
+                    actions.setExpandedFolders(
+                        expandedFolders.filter((f) => f !== folderId),
+                        values.connectionId
+                    )
+                }
             } else {
-                setExpanded([...expandedFolders, folderId])
+                if (values.searchTerm) {
+                    actions.setExpandedSearchFolders([...expandedFolders, folderId])
+                } else {
+                    actions.setExpandedFolders([...expandedFolders, folderId], values.connectionId)
+                }
             }
         },
         selectSourceTable: ({ tableName }) => {
@@ -2377,7 +2434,22 @@ export const queryDatabaseLogic = kea<queryDatabaseLogicType>([
             }
         },
     })),
-    subscriptions({
+    subscriptions(({ actions, values }) => ({
+        displayedTreeData: (displayedTreeData: TreeDataItem[]) => {
+            if (values.searchTerm || !shouldUseDirectConnectionTree(values.connectionId)) {
+                return
+            }
+
+            const key = getExpandedFoldersConnectionKey(values.connectionId)
+            if (Object.prototype.hasOwnProperty.call(values.expandedFoldersByConnection, key)) {
+                return
+            }
+
+            actions.setExpandedFolders(
+                getInitialExpandedFolders(values.connectionId, displayedTreeData),
+                values.connectionId
+            )
+        },
         posthogTables: (posthogTables: DatabaseSchemaTable[]) => {
             posthogTablesFuse.setCollection(posthogTables)
         },
@@ -2402,7 +2474,7 @@ export const queryDatabaseLogic = kea<queryDatabaseLogicType>([
         latestEndpointTables: (latestEndpointTables: DatabaseSchemaEndpointTable[]) => {
             endpointsFuse.setCollection(latestEndpointTables)
         },
-    }),
+    })),
     events(({ actions, values }) => ({
         afterMount: () => {
             if (values.featureFlags[FEATURE_FLAGS.EDITOR_DRAFTS]) {

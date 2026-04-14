@@ -292,7 +292,9 @@ export const QueryDatabase = ({
                 )
             }}
             expandedItemIds={expandedItemIds}
-            onSetExpandedItemIds={searchTerm ? setExpandedSearchFolders : setExpandedFolders}
+            onSetExpandedItemIds={
+                searchTerm ? setExpandedSearchFolders : (folderIds) => setExpandedFolders(folderIds, connectionId)
+            }
             onFolderClick={(folder, isExpanded) => {
                 if (folder) {
                     toggleFolderOpen(folder.id, isExpanded)

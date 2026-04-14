@@ -1,4 +1,8 @@
-import { getDefaultExpandedRootIds, groupDirectConnectionTableNodesBySchema } from './queryDatabaseLogic'
+import {
+    getDefaultExpandedRootIds,
+    getInitialExpandedFolders,
+    groupDirectConnectionTableNodesBySchema,
+} from './queryDatabaseLogic'
 
 describe('queryDatabaseLogic', () => {
     it('groups direct connection tables into schema folders', () => {
@@ -92,5 +96,56 @@ describe('queryDatabaseLogic', () => {
                 },
             ] as any)
         ).toEqual(['views'])
+    })
+
+    it('keeps loading schema folders expanded in direct connection mode', () => {
+        expect(
+            getDefaultExpandedRootIds('source-id', [
+                {
+                    id: 'schema-ungrouped',
+                    name: 'Tables',
+                    type: 'node',
+                    record: { type: 'source-folder', sourceType: 'Tables' },
+                    children: [
+                        {
+                            id: 'sources-loading/',
+                            name: 'Loading...',
+                            type: 'loading-indicator',
+                        },
+                    ],
+                },
+                {
+                    id: 'views',
+                    name: 'Views',
+                    type: 'node',
+                    record: { type: 'views' },
+                },
+            ] as any)
+        ).toEqual(['schema-ungrouped', 'views'])
+    })
+
+    it('expands all schema folders by default for a direct connection', () => {
+        expect(
+            getInitialExpandedFolders('source-id', [
+                {
+                    id: 'schema-system',
+                    name: 'system',
+                    type: 'node',
+                    record: { type: 'source-folder', sourceType: 'system' },
+                },
+                {
+                    id: 'schema-public',
+                    name: 'public',
+                    type: 'node',
+                    record: { type: 'source-folder', sourceType: 'public' },
+                },
+                {
+                    id: 'views',
+                    name: 'Views',
+                    type: 'node',
+                    record: { type: 'views' },
+                },
+            ] as any)
+        ).toEqual(expect.arrayContaining(['schema-system', 'schema-public', 'views']))
     })
 })
