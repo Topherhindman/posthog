@@ -1,6 +1,6 @@
+import hashlib
 import hmac
 import json
-import hashlib
 import uuid
 
 from django.http import HttpRequest, HttpResponse
