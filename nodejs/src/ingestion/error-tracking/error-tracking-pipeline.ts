@@ -179,13 +179,9 @@ export function createErrorTrackingPipeline(
                                     .pipeBatch(createOverflowLaneTTLRefreshStep(overflowLaneTTLRefreshService))
                                     // Process through Cymbal as a batch (before enrichment - Cymbal only
                                     // needs raw exception data, not person/geoip/group data).
-                                    // Retry on transient failures (5xx, timeout, network errors).
-                                    // 10 tries with 100ms base sleep and 2x backoff (capped at 10s)
-                                    // gives ~30s total budget to ride out a Cymbal restart.
-                                    .pipeBatchWithRetry(createCymbalProcessingStep(cymbalClient), {
-                                        tries: 10,
-                                        sleepMs: 100,
-                                    })
+                                    // Retries are handled per pod-group inside CymbalClient.
+                                    // Failed events are redirected to overflow, not thrown.
+                                    .pipeBatch(createCymbalProcessingStep(cymbalClient))
                                     // Enrich, prepare, create, and emit events
                                     // Batch fetch person (read-only, no updates)
                                     .pipeBatch(createFetchPersonBatchStep(personRepository))

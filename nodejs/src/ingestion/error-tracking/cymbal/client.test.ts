@@ -1,7 +1,16 @@
 import { parseJSON } from '~/utils/json-parse'
 
-import { CymbalClient, DnsResolveFunction, FetchFunction } from './client'
+import { CymbalClient, CymbalEventResult, DnsResolveFunction, FetchFunction } from './client'
 import { CymbalRequest, CymbalResponse } from './types'
+
+/** Extract the CymbalResponse from a successful result, or fail. */
+function unwrapSuccess(result: CymbalEventResult): CymbalResponse | null {
+    expect(result.status).toBe('success')
+    if (result.status !== 'success') {
+        throw new Error(`Expected success, got ${result.status}`)
+    }
+    return result.response
+}
 
 // Suppress logger output during tests
 jest.mock('~/utils/logger', () => ({
@@ -97,7 +106,7 @@ describe('CymbalClient', () => {
 
             const results = await client.processExceptions(toItems(requests))
 
-            expect(results).toEqual(responses)
+            expect(results.map((r) => unwrapSuccess(r))).toEqual(responses)
             expect(mockFetch).toHaveBeenCalledTimes(1)
             expect(mockFetch).toHaveBeenCalledWith(
                 'http://1.2.3.4:8080/process',
@@ -122,55 +131,31 @@ describe('CymbalClient', () => {
 
             const results = await client.processExceptions(toItems(requests))
 
-            expect(results).toEqual([null])
+            expect(unwrapSuccess(results[0])).toBeNull()
         })
 
-        it('throws retriable error on 5xx errors', async () => {
+        it('returns overflow on 5xx errors after retries', async () => {
             const client = createClient()
-            mockFetch.mockResolvedValueOnce({
-                status: 500,
-                text: () => Promise.resolve('Internal Server Error'),
-            })
+            mockFetch.mockResolvedValue({ status: 500, json: () => Promise.resolve({}) })
 
-            try {
-                await client.processExceptions(toItems([createRequest()]))
-                fail('Expected error to be thrown')
-            } catch (error: any) {
-                expect(error.message).toContain('Cymbal returned 500')
-                expect(error.isRetriable).toBe(true)
-            }
+            const results = await client.processExceptions(toItems([createRequest()]))
+            expect(results[0].status).toBe('failed')
+            expect(mockFetch).toHaveBeenCalledTimes(3) // 3 retries
         })
 
-        it('throws retriable error on 429 rate limit errors', async () => {
+        it('returns overflow on 429 rate limit errors after retries', async () => {
             const client = createClient()
-            mockFetch.mockResolvedValueOnce({
-                status: 429,
-                text: () => Promise.resolve('Too Many Requests'),
-            })
+            mockFetch.mockResolvedValue({ status: 429, json: () => Promise.resolve({}) })
 
-            try {
-                await client.processExceptions(toItems([createRequest()]))
-                fail('Expected error to be thrown')
-            } catch (error: any) {
-                expect(error.message).toContain('Cymbal returned 429')
-                expect(error.isRetriable).toBe(true)
-            }
+            const results = await client.processExceptions(toItems([createRequest()]))
+            expect(results[0].status).toBe('failed')
         })
 
         it('throws non-retriable error on 4xx errors (except 429)', async () => {
             const client = createClient()
-            mockFetch.mockResolvedValueOnce({
-                status: 400,
-                text: () => Promise.resolve('Bad Request'),
-            })
+            mockFetch.mockResolvedValueOnce({ status: 400, json: () => Promise.resolve({}) })
 
-            try {
-                await client.processExceptions(toItems([createRequest()]))
-                fail('Expected error to be thrown')
-            } catch (error: any) {
-                expect(error.message).toContain('Cymbal returned 400')
-                expect(error.isRetriable).toBe(false)
-            }
+            await expect(client.processExceptions(toItems([createRequest()]))).rejects.toThrow('Cymbal returned 400')
         })
 
         it('throws on response length mismatch', async () => {
@@ -220,36 +205,49 @@ describe('CymbalClient', () => {
             })
 
             const results = await client.processExceptions(toItems(requests))
-            expect(results).toEqual(responses)
-            expect(results[1]).toBeNull()
+            expect(unwrapSuccess(results[0])).toEqual(responses[0])
+            expect(unwrapSuccess(results[1])).toBeNull()
         })
 
-        it('throws retriable error on network errors', async () => {
+        it('returns overflow after exhausting retries on network errors', async () => {
             const client = createClient()
+            // Reject all 3 retry attempts
+            mockFetch.mockRejectedValue(new Error('Network error'))
+
+            const results = await client.processExceptions(toItems([createRequest()]))
+            expect(results).toHaveLength(1)
+            expect(results[0].status).toBe('failed')
+            if (results[0].status === 'failed') {
+                expect(results[0].reason).toContain('Network error')
+            }
+            // 3 attempts
+            expect(mockFetch).toHaveBeenCalledTimes(3)
+        })
+
+        it('returns overflow after exhausting retries on timeout', async () => {
+            const client = createClient()
+            mockFetch.mockRejectedValue(new Error('The operation was aborted due to timeout'))
+
+            const results = await client.processExceptions(toItems([createRequest()]))
+            expect(results).toHaveLength(1)
+            expect(results[0].status).toBe('failed')
+            expect(mockFetch).toHaveBeenCalledTimes(3)
+        })
+
+        it('retries then succeeds on transient errors', async () => {
+            const client = createClient()
+            const response = createResponse()
+            // First attempt fails, second succeeds
             mockFetch.mockRejectedValueOnce(new Error('Network error'))
+            mockFetch.mockResolvedValueOnce({
+                status: 200,
+                json: () => Promise.resolve([response]),
+            })
 
-            try {
-                await client.processExceptions(toItems([createRequest()]))
-                fail('Expected error to be thrown')
-            } catch (error: any) {
-                expect(error.message).toContain('Network error')
-                expect(error.isRetriable).toBe(true)
-            }
-        })
-
-        it('throws retriable error on timeout', async () => {
-            const client = createClient()
-            const timeoutError = new Error('Timeout')
-            timeoutError.name = 'TimeoutError'
-            mockFetch.mockRejectedValueOnce(timeoutError)
-
-            try {
-                await client.processExceptions(toItems([createRequest()]))
-                fail('Expected error to be thrown')
-            } catch (error: any) {
-                expect(error.message).toContain('Timeout')
-                expect(error.isRetriable).toBe(true)
-            }
+            const results = await client.processExceptions(toItems([createRequest()]))
+            expect(results).toHaveLength(1)
+            expect(results[0].status).toBe('success')
+            expect(mockFetch).toHaveBeenCalledTimes(2)
         })
 
         it('propagates DNS errors', async () => {
@@ -278,7 +276,7 @@ describe('CymbalClient', () => {
             })
 
             const results = await client.processExceptions(toItems(requests))
-            expect(results).toEqual(responses)
+            expect(results.map((r) => unwrapSuccess(r))).toEqual(responses)
             expect(mockFetch).toHaveBeenCalledTimes(1)
         })
 
@@ -308,7 +306,7 @@ describe('CymbalClient', () => {
 
             const results = await smallClient.processExceptions(toItems(requests, 100))
             expect(results).toHaveLength(3)
-            expect(results.map((r) => r!.uuid)).toEqual(['uuid-1', 'uuid-2', 'uuid-3'])
+            expect(results.map((r) => unwrapSuccess(r)!.uuid)).toEqual(['uuid-1', 'uuid-2', 'uuid-3'])
             expect(mockFetch).toHaveBeenCalledTimes(3)
         })
 
@@ -332,7 +330,13 @@ describe('CymbalClient', () => {
             })
 
             const results = await smallClient.processExceptions(toItems(requests, 200))
-            expect(results.map((r) => r!.uuid)).toEqual(['uuid-0', 'uuid-1', 'uuid-2', 'uuid-3', 'uuid-4'])
+            expect(results.map((r) => unwrapSuccess(r)!.uuid)).toEqual([
+                'uuid-0',
+                'uuid-1',
+                'uuid-2',
+                'uuid-3',
+                'uuid-4',
+            ])
             expect(mockFetch).toHaveBeenCalledTimes(3)
         })
 
@@ -361,34 +365,27 @@ describe('CymbalClient', () => {
             expect(mockFetch).toHaveBeenCalledTimes(2)
         })
 
-        it('aborts remaining chunks if one fails', async () => {
+        it('returns overflow for all events in group when chunk fails after retries', async () => {
             const smallClient = new CymbalClient({
                 baseUrl: 'http://cymbal.example.com:8080',
                 timeoutMs: 5000,
                 maxBodyBytes: 150,
+                retries: 1, // Single try, no retries for faster test
                 fetch: mockFetch as FetchFunction,
                 dnsResolve: jest.fn().mockResolvedValue(['1.2.3.4']) as DnsResolveFunction,
             })
 
-            let callCount = 0
-            mockFetch.mockImplementation((_url: string, options: { body: string }) => {
-                callCount++
-                if (callCount === 1) {
-                    const parsed = parseJSON(options.body)
-                    return Promise.resolve({
-                        status: 200,
-                        json: () => Promise.resolve(parsed.map((r: CymbalRequest) => createResponse({ uuid: r.uuid }))),
-                    })
-                }
-                return Promise.resolve({ status: 500, text: () => Promise.resolve('Internal Server Error') })
-            })
+            // All calls return 500
+            mockFetch.mockResolvedValue({ status: 500, json: () => Promise.resolve({}) })
 
             const requests = [
                 createRequest({ uuid: 'uuid-1' }),
                 createRequest({ uuid: 'uuid-2' }),
                 createRequest({ uuid: 'uuid-3' }),
             ]
-            await expect(smallClient.processExceptions(toItems(requests, 100))).rejects.toThrow('Cymbal returned 500')
+            const results = await smallClient.processExceptions(toItems(requests, 100))
+            expect(results).toHaveLength(3)
+            expect(results.every((r) => r.status === 'failed')).toBe(true)
         })
     })
 
@@ -448,7 +445,7 @@ describe('CymbalClient', () => {
             expect(twoEventCall!.map((r: CymbalRequest) => r.team_id)).toEqual([1, 3])
 
             // Results still maintain 1:1 position correspondence
-            expect(results.map((r) => r!.uuid)).toEqual(['uuid-a', 'uuid-b', 'uuid-c'])
+            expect(results.map((r) => unwrapSuccess(r)!.uuid)).toEqual(['uuid-a', 'uuid-b', 'uuid-c'])
         })
 
         it('routes events from different teams to potentially different pods in parallel', async () => {
@@ -496,8 +493,67 @@ describe('CymbalClient', () => {
 
             const results = await client.processExceptions(toItems(requests))
 
-            expect(results.map((r) => r!.uuid)).toEqual(['uuid-a', 'uuid-b', 'uuid-c', 'uuid-d', 'uuid-e'])
-            expect(results.map((r) => r!.team_id)).toEqual([1, 2, 1, 3, 2])
+            expect(results.map((r) => unwrapSuccess(r)!.uuid)).toEqual([
+                'uuid-a',
+                'uuid-b',
+                'uuid-c',
+                'uuid-d',
+                'uuid-e',
+            ])
+            expect(results.map((r) => unwrapSuccess(r)!.team_id)).toEqual([1, 2, 1, 3, 2])
+        })
+
+        it('preserves position correspondence when some pod groups overflow', async () => {
+            // Use 2 pods so we get predictable routing
+            const client = createRoutedClient(['10.0.0.1', '10.0.0.2'])
+
+            // 5 events with mixed team_ids — will route to different pods
+            const requests = [
+                createRequest({ uuid: 'uuid-0', team_id: 1 }),
+                createRequest({ uuid: 'uuid-1', team_id: 2 }),
+                createRequest({ uuid: 'uuid-2', team_id: 1 }),
+                createRequest({ uuid: 'uuid-3', team_id: 2 }),
+                createRequest({ uuid: 'uuid-4', team_id: 1 }),
+            ]
+
+            // One pod succeeds, the other returns 500 (will overflow after retries)
+            mockFetch.mockImplementation((url: string, options: { body: string }) => {
+                if (url.includes('10.0.0.1')) {
+                    const parsed = parseJSON(options.body)
+                    return Promise.resolve({
+                        status: 200,
+                        json: () =>
+                            Promise.resolve(parsed.map((req: CymbalRequest) => createResponse({ uuid: req.uuid }))),
+                    })
+                }
+                return Promise.resolve({ status: 500, json: () => Promise.resolve({}) })
+            })
+
+            const results = await client.processExceptions(toItems(requests))
+
+            expect(results).toHaveLength(5)
+
+            // All results with the same team_id should have the same status
+            // (since they route to the same pod). Verify position correspondence
+            // by checking that success results carry the correct uuid.
+            const team1Results = [results[0], results[2], results[4]]
+            const team2Results = [results[1], results[3]]
+
+            // One team's events all succeeded, the other's all overflowed
+            const team1Status = team1Results[0].status
+            const team2Status = team2Results[0].status
+            expect(new Set([team1Status, team2Status])).toEqual(new Set(['success', 'failed']))
+
+            // All events for each team should have the same status
+            expect(team1Results.every((r) => r.status === team1Status)).toBe(true)
+            expect(team2Results.every((r) => r.status === team2Status)).toBe(true)
+
+            // Success results should have the correct uuid at each position
+            for (let i = 0; i < results.length; i++) {
+                if (results[i].status === 'success') {
+                    expect((results[i] as any).response.uuid).toBe(requests[i].uuid)
+                }
+            }
         })
 
         it('routes consistently for the same team_id', async () => {

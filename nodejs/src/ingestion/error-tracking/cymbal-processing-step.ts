@@ -4,9 +4,10 @@ import { logger } from '~/utils/logger'
 import { invalidTimestampCounter } from '~/worker/ingestion/event-pipeline/metrics'
 import { parseEventTimestamp } from '~/worker/ingestion/timestamps'
 
+import { OVERFLOW_OUTPUT, OverflowOutput } from '../common/outputs'
 import { BatchProcessingStep } from '../pipelines/base-batch-pipeline'
 import { PipelineWarning } from '../pipelines/pipeline.interface'
-import { PipelineResult, drop, ok } from '../pipelines/results'
+import { PipelineResult, drop, ok, redirect } from '../pipelines/results'
 import { CymbalClient } from './cymbal/client'
 import { CymbalResponse } from './cymbal/types'
 
@@ -74,8 +75,8 @@ function getCymbalProcessingWarnings(response: CymbalResponse, eventUuid: string
  */
 export function createCymbalProcessingStep<T extends CymbalProcessingInput>(
     cymbalClient: CymbalClient
-): BatchProcessingStep<T, T> {
-    return async function cymbalProcessingStep(inputs: T[]): Promise<PipelineResult<T>[]> {
+): BatchProcessingStep<T, T, OverflowOutput> {
+    return async function cymbalProcessingStep(inputs: T[]): Promise<PipelineResult<T, OverflowOutput>[]> {
         if (inputs.length === 0) {
             return []
         }
@@ -105,14 +106,24 @@ export function createCymbalProcessingStep<T extends CymbalProcessingInput>(
         }))
 
         try {
-            const responses = await cymbalClient.processExceptions(items)
+            const results = await cymbalClient.processExceptions(items)
 
-            // Map responses back to results, maintaining 1:1 correspondence
-            return responses.map((response, index) => {
+            // Map results back to pipeline results, maintaining 1:1 correspondence
+            return results.map((result, index) => {
                 const { input, warnings: timestampWarnings } = validatedInputs[index]
 
+                // Retries exhausted — redirect to overflow topic for later processing
+                if (result.status === 'failed') {
+                    logger.warn('⚠️', 'cymbal_event_overflow', {
+                        eventUuid: input.event.uuid,
+                        teamId: input.team.id,
+                        reason: result.reason,
+                    })
+                    return redirect(result.reason, OVERFLOW_OUTPUT)
+                }
+
                 // Null response means the event should be dropped (suppressed)
-                if (!response) {
+                if (!result.response) {
                     logger.debug('🔇', 'cymbal_event_suppressed', {
                         eventUuid: input.event.uuid,
                         teamId: input.team.id,
@@ -123,23 +134,21 @@ export function createCymbalProcessingStep<T extends CymbalProcessingInput>(
                 // Replace event properties with Cymbal's processed properties.
                 // Cymbal returns the full properties object with $exception_list, $exception_fingerprint, etc.
                 // We mutate the event directly since it's not used after this step.
-                input.event.properties = response.properties
+                input.event.properties = result.response.properties
 
                 // Combine timestamp validation warnings with Cymbal processing warnings
-                const cymbalWarnings = getCymbalProcessingWarnings(response, input.event.uuid)
+                const cymbalWarnings = getCymbalProcessingWarnings(result.response, input.event.uuid)
                 const warnings = [...timestampWarnings, ...cymbalWarnings]
 
                 return ok({ ...input, event: input.event }, [], warnings)
             })
         } catch (error) {
+            // Non-retriable errors (4xx, validation failures) propagate to crash the batch.
+            // This indicates a bug in our request building that needs fixing.
             logger.error('❌', 'cymbal_batch_processing_error', {
                 error: error instanceof Error ? error.message : String(error),
                 batchSize: inputs.length,
             })
-
-            // Throw so Kafka retries the batch. For retriable errors (5xx, timeout, network),
-            // this allows automatic recovery when Cymbal comes back. For non-retriable errors
-            // (4xx), this indicates a bug in our request building that needs fixing.
             throw error
         }
     }
