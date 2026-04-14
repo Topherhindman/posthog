@@ -24,8 +24,8 @@ import type {
     PatchedLogsAlertConfigurationApi,
     PatchedLogsViewApi,
     PluginConfigsLogsListParams,
-    _LogsQueryRequestApi,
     SparklineRequestApi,
+    _LogsQueryRequestApi,
 } from './api.schemas'
 
 // https://stackoverflow.com/questions/49579094/typescript-conditional-types-filter-out-readonly-properties-pick-only-requir/49579497#49579497

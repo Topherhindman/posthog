@@ -9,17 +9,86 @@ import {
     LogsAlertsPartialUpdateBody,
     LogsAlertsPartialUpdateParams,
     LogsAlertsRetrieveParams,
+    LogsAttributesRetrieveQueryParams,
+    LogsQueryCreateBody,
+    LogsValuesRetrieveQueryParams,
 } from '@/generated/logs/api'
+import { withPostHogUrl, pickResponseFields, type WithPostHogUrl } from '@/tools/tool-utils'
 import type { Context, ToolBase, ZodObjectAny } from '@/tools/types'
+
+const QueryLogsSchema = LogsQueryCreateBody
+
+const queryLogs = (): ToolBase<typeof QueryLogsSchema, unknown> => ({
+    name: 'query-logs',
+    schema: QueryLogsSchema,
+    handler: async (context: Context, params: z.infer<typeof QueryLogsSchema>) => {
+        const projectId = await context.stateManager.getProjectId()
+        const body: Record<string, unknown> = {}
+        if (params.query !== undefined) {
+            body['query'] = params.query
+        }
+        const result = await context.api.request<unknown>({
+            method: 'POST',
+            path: `/api/projects/${projectId}/logs/query/`,
+            body,
+        })
+        const filtered = pickResponseFields(result, ['results']) as typeof result
+        return filtered
+    },
+})
+
+const LogsAttributesListSchema = LogsAttributesRetrieveQueryParams
+
+const logsAttributesList = (): ToolBase<typeof LogsAttributesListSchema, unknown> => ({
+    name: 'logs-attributes-list',
+    schema: LogsAttributesListSchema,
+    handler: async (context: Context, params: z.infer<typeof LogsAttributesListSchema>) => {
+        const projectId = await context.stateManager.getProjectId()
+        const result = await context.api.request<unknown>({
+            method: 'GET',
+            path: `/api/projects/${projectId}/logs/attributes/`,
+            query: {
+                attribute_type: params.attribute_type,
+                limit: params.limit,
+                offset: params.offset,
+                search: params.search,
+            },
+        })
+        const filtered = pickResponseFields(result, ['results', 'count']) as typeof result
+        return filtered
+    },
+})
+
+const LogsAttributeValuesListSchema = LogsValuesRetrieveQueryParams
+
+const logsAttributeValuesList = (): ToolBase<typeof LogsAttributeValuesListSchema, unknown> => ({
+    name: 'logs-attribute-values-list',
+    schema: LogsAttributeValuesListSchema,
+    handler: async (context: Context, params: z.infer<typeof LogsAttributeValuesListSchema>) => {
+        const projectId = await context.stateManager.getProjectId()
+        const result = await context.api.request<unknown>({
+            method: 'GET',
+            path: `/api/projects/${projectId}/logs/values/`,
+            query: {
+                attribute_type: params.attribute_type,
+                key: params.key,
+                value: params.value,
+            },
+        })
+        const filtered = pickResponseFields(result, ['results']) as typeof result
+        return filtered
+    },
+})
 
 const LogsAlertsListSchema = LogsAlertsListQueryParams
 
 const logsAlertsList = (): ToolBase<
     typeof LogsAlertsListSchema,
-    Schemas.PaginatedLogsAlertConfigurationList & { _posthogUrl: string }
+    WithPostHogUrl<Schemas.PaginatedLogsAlertConfigurationList>
 > => ({
     name: 'logs-alerts-list',
     schema: LogsAlertsListSchema,
+    mcpVersion: 1,
     handler: async (context: Context, params: z.infer<typeof LogsAlertsListSchema>) => {
         const projectId = await context.stateManager.getProjectId()
         const result = await context.api.request<Schemas.PaginatedLogsAlertConfigurationList>({
@@ -30,10 +99,7 @@ const logsAlertsList = (): ToolBase<
                 offset: params.offset,
             },
         })
-        return {
-            ...(result as any),
-            _posthogUrl: `${context.api.getProjectBaseUrl(projectId)}/logs`,
-        }
+        return await withPostHogUrl(context, result, '/logs')
     },
 })
 
@@ -89,6 +155,7 @@ const LogsAlertsRetrieveSchema = LogsAlertsRetrieveParams.omit({ project_id: tru
 const logsAlertsRetrieve = (): ToolBase<typeof LogsAlertsRetrieveSchema, Schemas.LogsAlertConfiguration> => ({
     name: 'logs-alerts-retrieve',
     schema: LogsAlertsRetrieveSchema,
+    mcpVersion: 1,
     handler: async (context: Context, params: z.infer<typeof LogsAlertsRetrieveSchema>) => {
         const projectId = await context.stateManager.getProjectId()
         const result = await context.api.request<Schemas.LogsAlertConfiguration>({
@@ -164,6 +231,9 @@ const logsAlertsDestroy = (): ToolBase<typeof LogsAlertsDestroySchema, unknown> 
 })
 
 export const GENERATED_TOOLS: Record<string, () => ToolBase<ZodObjectAny>> = {
+    'query-logs': queryLogs,
+    'logs-attributes-list': logsAttributesList,
+    'logs-attribute-values-list': logsAttributeValuesList,
     'logs-alerts-list': logsAlertsList,
     'logs-alerts-create': logsAlertsCreate,
     'logs-alerts-retrieve': logsAlertsRetrieve,

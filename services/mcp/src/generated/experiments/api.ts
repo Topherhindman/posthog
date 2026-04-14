@@ -1142,7 +1142,6 @@ export const experimentsPartialUpdateBodyNameMax = 400
 
 export const experimentsPartialUpdateBodyDescriptionMax = 400
 
-export const experimentsPartialUpdateBodyArchivedDefault = false
 export const experimentsPartialUpdateBodyExposureCriteriaOneExposureConfigKindDefault = `ExperimentEventExposureConfig`
 export const experimentsPartialUpdateBodyExposureCriteriaOneExposureConfigPropertiesItemTypeDefault = `event`
 export const experimentsPartialUpdateBodyMetricsOneItemCompletionEventPropertiesItemTypeDefault = `event`
@@ -1159,7 +1158,6 @@ export const experimentsPartialUpdateBodyMetricsSecondaryOneItemNumeratorPropert
 export const experimentsPartialUpdateBodyMetricsSecondaryOneItemSeriesItemPropertiesItemTypeDefault = `event`
 export const experimentsPartialUpdateBodyMetricsSecondaryOneItemSourcePropertiesItemTypeDefault = `event`
 export const experimentsPartialUpdateBodyMetricsSecondaryOneItemStartEventPropertiesItemTypeDefault = `event`
-export const experimentsPartialUpdateBodyAllowUnknownEventsDefault = false
 
 export const ExperimentsPartialUpdateBody = /* @__PURE__ */ zod
     .object({
@@ -1213,10 +1211,7 @@ export const ExperimentsPartialUpdateBody = /* @__PURE__ */ zod
                 "IDs of shared saved metrics to attach to this experiment. Each item has 'id' (saved metric ID) and 'metadata' with 'type' (primary or secondary)."
             ),
         filters: zod.unknown().optional(),
-        archived: zod
-            .boolean()
-            .default(experimentsPartialUpdateBodyArchivedDefault)
-            .describe('Whether the experiment is archived.'),
+        archived: zod.boolean().optional().describe('Whether the experiment is archived.'),
         deleted: zod.boolean().nullish(),
         type: zod
             .union([zod.enum(['web', 'product']).describe('* `web` - web\n* `product` - product'), zod.literal(null)])
@@ -2198,7 +2193,7 @@ export const ExperimentsPartialUpdateBody = /* @__PURE__ */ zod
             .describe('Secondary metrics for additional measurements. Same format as primary metrics.'),
         stats_config: zod.unknown().nullish(),
         scheduling_config: zod.unknown().nullish(),
-        allow_unknown_events: zod.boolean().default(experimentsPartialUpdateBodyAllowUnknownEventsDefault),
+        allow_unknown_events: zod.boolean().optional(),
         _create_in_folder: zod.string().optional(),
         conclusion: zod
             .union([

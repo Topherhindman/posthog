@@ -326,74 +326,6 @@ export interface PatchedLogsAlertConfigurationApi {
     readonly updated_at?: string | null
 }
 
-export interface DateRangeApi {
-    /** @nullable */
-    date_from?: string | null
-    /** @nullable */
-    date_to?: string | null
-    /**
-     * Whether the date_from and date_to should be used verbatim. Disables rounding to the start and end of period.
-     * @nullable
-     */
-    explicitDate?: boolean | null
-}
-
-/**
- * * `trace` - trace
- * `debug` - debug
- * `info` - info
- * `warn` - warn
- * `error` - error
- * `fatal` - fatal
- */
-export type SeverityLevelsEnumApi = (typeof SeverityLevelsEnumApi)[keyof typeof SeverityLevelsEnumApi]
-
-export const SeverityLevelsEnumApi = {
-    Trace: 'trace',
-    Debug: 'debug',
-    Info: 'info',
-    Warn: 'warn',
-    Error: 'error',
-    Fatal: 'fatal',
-} as const
-
-/**
- * * `severity` - severity
- * `service` - service
- */
-export type SparklineBreakdownByEnumApi = (typeof SparklineBreakdownByEnumApi)[keyof typeof SparklineBreakdownByEnumApi]
-
-export const SparklineBreakdownByEnumApi = {
-    Severity: 'severity',
-    Service: 'service',
-} as const
-
-export interface SparklineQueryApi {
-    /** Date range for the sparkline query. */
-    dateRange: DateRangeApi
-    /** Filter by severity levels (trace, debug, info, warn, error, fatal). */
-    severityLevels?: SeverityLevelsEnumApi[]
-    /** Filter by service names. */
-    serviceNames?: string[]
-    /**
-     * Free text search term to filter log entries.
-     * @nullable
-     */
-    searchTerm?: string | null
-    /** Property filter group object for structured filtering. */
-    filterGroup?: unknown | null
-    /** Break down sparkline data by severity level or service name (default: severity).
-
-* `severity` - severity
-* `service` - service */
-    sparklineBreakdownBy?: SparklineBreakdownByEnumApi | NullEnumApi | null
-}
-
-export interface SparklineRequestApi {
-    /** Sparkline query parameters. */
-    query: SparklineQueryApi
-}
-
 export interface LogsAlertSimulateRequestApi {
     /** Filter criteria — same format as LogsAlertConfiguration.filters. */
     filters: unknown
@@ -605,6 +537,62 @@ export interface _LogsQueryBodyApi {
 export interface _LogsQueryRequestApi {
     /** The logs query to execute. */
     query: _LogsQueryBodyApi
+}
+
+export interface DateRangeApi {
+    /**
+   * Start of the date range. Accepts ISO 8601 timestamps (e.g., 2024-01-15T00:00:00Z) or relative formats: -7d (7 days ago), -2w (2 weeks ago), -1m (1 month ago),
+-1h (1 hour ago), -1mStart (start of last month), -1yStart (start of last year).
+   * @nullable
+   */
+    date_from?: string | null
+    /**
+     * End of the date range. Same format as date_from. Omit or null for "now".
+     * @nullable
+     */
+    date_to?: string | null
+    /**
+     * Whether the date_from and date_to should be used verbatim. Disables rounding to the start and end of period.
+     * @nullable
+     */
+    explicitDate?: boolean | null
+}
+
+/**
+ * * `severity` - severity
+ * `service` - service
+ */
+export type SparklineBreakdownByEnumApi = (typeof SparklineBreakdownByEnumApi)[keyof typeof SparklineBreakdownByEnumApi]
+
+export const SparklineBreakdownByEnumApi = {
+    Severity: 'severity',
+    Service: 'service',
+} as const
+
+export interface SparklineQueryApi {
+    /** Date range for the sparkline query. */
+    dateRange: DateRangeApi
+    /** Filter by severity levels (trace, debug, info, warn, error, fatal). */
+    severityLevels?: SeverityLevelsEnumApi[]
+    /** Filter by service names. */
+    serviceNames?: string[]
+    /**
+     * Free text search term to filter log entries.
+     * @nullable
+     */
+    searchTerm?: string | null
+    /** Property filter group object for structured filtering. */
+    filterGroup?: unknown | null
+    /** Break down sparkline data by severity level or service name (default: severity).
+
+* `severity` - severity
+* `service` - service */
+    sparklineBreakdownBy?: SparklineBreakdownByEnumApi | NullEnumApi | null
+}
+
+export interface SparklineRequestApi {
+    /** Sparkline query parameters. */
+    query: SparklineQueryApi
 }
 
 /**

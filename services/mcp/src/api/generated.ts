@@ -30461,6 +30461,38 @@ export namespace Schemas {
       readonly share_passwords: readonly SharePassword[];
     }
 
+    export interface ShipVariant {
+      /** The conclusion of the experiment.
+
+    * `won` - won
+    * `lost` - lost
+    * `inconclusive` - inconclusive
+    * `stopped_early` - stopped_early
+    * `invalid` - invalid */
+      conclusion?: ConclusionEnum | NullEnum | null;
+      /**
+       * Optional comment about the experiment conclusion.
+       * @nullable
+       */
+      conclusion_comment?: string | null;
+      /** The key of the variant to ship to 100% of users. */
+      variant_key: string;
+    }
+
+    /**
+     * * `none` - none
+    * `auto` - auto
+    * `mapped` - mapped
+     */
+    export type SourceMatchEnum = typeof SourceMatchEnum[keyof typeof SourceMatchEnum];
+
+
+    export const SourceMatchEnum = {
+      None: 'none',
+      Auto: 'auto',
+      Mapped: 'mapped',
+    } as const;
+
     /**
      * * `severity` - severity
     * `service` - service
@@ -30498,38 +30530,6 @@ export namespace Schemas {
       /** Sparkline query parameters. */
       query: SparklineQuery;
     }
-
-    export interface ShipVariant {
-      /** The conclusion of the experiment.
-
-    * `won` - won
-    * `lost` - lost
-    * `inconclusive` - inconclusive
-    * `stopped_early` - stopped_early
-    * `invalid` - invalid */
-      conclusion?: ConclusionEnum | NullEnum | null;
-      /**
-       * Optional comment about the experiment conclusion.
-       * @nullable
-       */
-      conclusion_comment?: string | null;
-      /** The key of the variant to ship to 100% of users. */
-      variant_key: string;
-    }
-
-    /**
-     * * `none` - none
-    * `auto` - auto
-    * `mapped` - mapped
-     */
-    export type SourceMatchEnum = typeof SourceMatchEnum[keyof typeof SourceMatchEnum];
-
-
-    export const SourceMatchEnum = {
-      None: 'none',
-      Auto: 'auto',
-      Mapped: 'mapped',
-    } as const;
 
     export interface SummaryBullet {
       text: string;
