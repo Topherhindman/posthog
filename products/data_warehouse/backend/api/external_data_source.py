@@ -490,12 +490,23 @@ class ExternalDataSourceSerializers(UserAccessControlSerializerMixin, serializer
 
     @extend_schema_field(serializers.CharField(allow_null=True))
     def get_latest_error(self, instance: ExternalDataSource):
-        schema_with_error = instance.schemas.filter(latest_error__isnull=False).first()
+        prefetched_schemas = getattr(instance, "_prefetched_objects_cache", {}).get("schemas")
+        if prefetched_schemas is not None:
+            schema_with_error = next(
+                (schema for schema in prefetched_schemas if not schema.deleted and schema.latest_error is not None),
+                None,
+            )
+        else:
+            schema_with_error = instance.schemas.filter(latest_error__isnull=False).first()
         return schema_with_error.latest_error if schema_with_error else None
 
     @extend_schema_field(serializers.ListField(child=serializers.DictField()))
     def get_schemas(self, instance: ExternalDataSource):
-        schemas = instance.schemas.exclude(deleted=True).order_by("name")
+        prefetched_schemas = getattr(instance, "_prefetched_objects_cache", {}).get("schemas")
+        if prefetched_schemas is not None:
+            schemas = [schema for schema in prefetched_schemas if not schema.deleted]
+        else:
+            schemas = instance.schemas.exclude(deleted=True).order_by("name")
         return ExternalDataSchemaSerializer(schemas, many=True, read_only=True, context=self.context).data
 
     def update(self, instance: ExternalDataSource, validated_data: Any) -> Any:

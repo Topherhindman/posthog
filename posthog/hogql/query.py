@@ -222,6 +222,22 @@ def get_runtime_direct_postgres_connection_metadata(
     return runtime_connection_metadata or None
 
 
+def should_hydrate_runtime_direct_postgres_connection_metadata(
+    schema: str | None,
+    connection_metadata: dict[str, object] | None = None,
+) -> bool:
+    normalized_schema = schema.strip() if isinstance(schema, str) and schema.strip() else None
+    if normalized_schema is None:
+        return True
+
+    if not isinstance(connection_metadata, dict):
+        return False
+
+    engine = connection_metadata.get("engine")
+    database = connection_metadata.get("database")
+    return engine == "duckdb" and not (isinstance(database, str) and database.strip())
+
+
 @dataclasses.dataclass
 class HogQLQueryExecutor:
     query: Union[str, ast.SelectQuery, ast.SelectSetQuery]
@@ -575,10 +591,15 @@ class HogQLQueryExecutor:
                         connection_kwargs["sslmode"] = "require"
 
                     with psycopg.connect(**connection_kwargs) as connection:
-                        runtime_connection_metadata = get_runtime_direct_postgres_connection_metadata(
-                            connection,
-                            source.connection_metadata,
-                        )
+                        runtime_connection_metadata = source.connection_metadata
+                        if should_hydrate_runtime_direct_postgres_connection_metadata(
+                            source_schema,
+                            runtime_connection_metadata,
+                        ):
+                            runtime_connection_metadata = get_runtime_direct_postgres_connection_metadata(
+                                connection,
+                                runtime_connection_metadata,
+                            )
                         session_setup_sql = direct_postgres_session_setup_sql(
                             source_schema,
                             runtime_connection_metadata,
