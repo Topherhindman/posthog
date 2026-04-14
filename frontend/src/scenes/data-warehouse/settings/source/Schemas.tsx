@@ -136,10 +136,22 @@ export const Schemas = ({ id, tabId, availableSources }: SchemasProps): JSX.Elem
         filteredSchemas,
         showEnabledSchemasOnly,
         schemaNameFilter,
+        isProjectTime,
         syncingNow,
         refreshingSchemas,
     } = useValues(logic)
-    const { setShowEnabledSchemasOnly, setSchemaNameFilter, syncNow, refreshSchemas } = useActions(logic)
+    const {
+        setShowEnabledSchemasOnly,
+        setSchemaNameFilter,
+        setIsProjectTime,
+        syncNow,
+        refreshSchemas,
+        updateSchema,
+        reloadSchema,
+        resyncSchema,
+        cancelSchema,
+        deleteTable,
+    } = useActions(logic)
     const { addProductIntentForCrossSell } = useActions(teamLogic)
 
     const { featureFlags } = useValues(featureFlagLogic)
@@ -227,6 +239,14 @@ export const Schemas = ({ id, tabId, availableSources }: SchemasProps): JSX.Elem
                 schemas={filteredSchemas}
                 isLoading={sourceLoading}
                 isDirectQuerySource={isDirectQuerySource}
+                source={source}
+                isProjectTime={isProjectTime}
+                updateSchema={updateSchema}
+                reloadSchema={reloadSchema}
+                resyncSchema={resyncSchema}
+                cancelSchema={cancelSchema}
+                deleteTable={deleteTable}
+                setIsProjectTime={setIsProjectTime}
             />
             {source?.source_type &&
                 REVENUE_ENABLED_SOURCES.includes(source.source_type) &&
@@ -260,6 +280,14 @@ interface SchemaTableProps {
     schemas: ExternalDataSourceSchema[]
     isLoading: boolean
     isDirectQuerySource: boolean
+    source: ExternalDataSource | null
+    isProjectTime: boolean
+    updateSchema: (schema: ExternalDataSourceSchema) => void
+    reloadSchema: (schema: ExternalDataSourceSchema) => void
+    resyncSchema: (schema: ExternalDataSourceSchema) => void
+    cancelSchema: (schema: ExternalDataSourceSchema) => void
+    deleteTable: (schema: ExternalDataSourceSchema) => void
+    setIsProjectTime: (isProjectTime: boolean) => void
 }
 
 const StatusTagSetting: Record<ExternalDataSchemaStatus | ExternalDataJobStatus, LemonTagType> = {
@@ -382,12 +410,20 @@ function DirectQuerySchemaGroups({
     )
 }
 
-export const SchemaTable = ({ schemas, isLoading, isDirectQuerySource }: SchemaTableProps): JSX.Element => {
+export const SchemaTable = ({
+    schemas,
+    isLoading,
+    isDirectQuerySource,
+    source,
+    isProjectTime,
+    updateSchema,
+    reloadSchema,
+    resyncSchema,
+    cancelSchema,
+    deleteTable,
+    setIsProjectTime,
+}: SchemaTableProps): JSX.Element => {
     const { currentTeam } = useValues(teamLogic)
-    const { updateSchema, reloadSchema, resyncSchema, cancelSchema, deleteTable, setIsProjectTime } = useActions(
-        dataWarehouseSourceSettingsLogic
-    )
-    const { isProjectTime, source } = useValues(dataWarehouseSourceSettingsLogic)
     const { schemaReloadingById } = useValues(dataWarehouseSettingsLogic)
     const [initialLoad, setInitialLoad] = useState(true)
     const groupedDirectQuerySchemas = groupDirectQuerySourceSchemasBySchema(schemas)
@@ -523,7 +559,12 @@ export const SchemaTable = ({ schemas, isLoading, isDirectQuerySource }: SchemaT
                             return (
                                 <SourceEditorAction source={source}>
                                     {({ disabledReason }) => (
-                                        <AnchorTime schema={schema} disabledReason={disabledReason} />
+                                        <AnchorTime
+                                            schema={schema}
+                                            disabledReason={disabledReason}
+                                            isProjectTime={isProjectTime}
+                                            updateSchema={updateSchema}
+                                        />
                                     )}
                                 </SourceEditorAction>
                             )
@@ -1083,13 +1124,15 @@ const SyncMethodModal = ({ schema }: { schema: ExternalDataSourceSchema }): JSX.
 const AnchorTime = ({
     schema,
     disabledReason,
+    isProjectTime,
+    updateSchema,
 }: {
     schema: ExternalDataSourceSchema
     disabledReason: string | null
+    isProjectTime: boolean
+    updateSchema: (schema: ExternalDataSourceSchema) => void
 }): JSX.Element => {
-    const { isProjectTime } = useValues(dataWarehouseSourceSettingsLogic)
     const { currentTeam } = useValues(teamLogic)
-    const { updateSchema } = useActions(dataWarehouseSourceSettingsLogic)
     const [isSyncTimeSet, setIsSyncTimeSet] = useState(!!schema.sync_time_of_day)
 
     const utcTime = schema.sync_time_of_day || '00:00:00'
