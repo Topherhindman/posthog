@@ -1,6 +1,8 @@
 import { useActions, useValues } from 'kea'
 import { router } from 'kea-router'
 
+import { IconGear } from '@posthog/icons'
+
 import { LemonSelect } from 'lib/lemon-ui/LemonSelect'
 import { urls } from 'scenes/urls'
 
@@ -76,6 +78,15 @@ export function ConnectionSelector(): JSX.Element | null {
                 options: group.options.map((option) => ({
                     ...option,
                     icon: option.iconSrc ? sourceIcon(option.iconSrc) : undefined,
+                    sideAction: option.managementUrl
+                        ? {
+                              to: option.managementUrl,
+                              icon: <IconGear />,
+                              tooltip: 'Open source settings',
+                              'aria-label': `Open settings for ${option.label}`,
+                              'data-attr': 'connection-selector-source-settings',
+                          }
+                        : undefined,
                 })),
             }))}
         />

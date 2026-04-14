@@ -7,7 +7,7 @@ import { FEATURE_FLAGS } from 'lib/constants'
 import { LemonTab, LemonTabs } from 'lib/lemon-ui/LemonTabs'
 import { featureFlagLogic } from 'lib/logic/featureFlagLogic'
 import { DataPipelinesSelfManagedSource } from 'scenes/data-pipelines/DataPipelinesSelfManagedSource'
-import { cleanSourceId, isManagedSourceId, isSelfManagedSourceId } from 'scenes/data-warehouse/utils'
+import { cleanSourceId, isSelfManagedSourceId } from 'scenes/data-warehouse/utils'
 import { Scene, SceneExport } from 'scenes/sceneTypes'
 import { urls } from 'scenes/urls'
 
@@ -31,6 +31,14 @@ export interface DataWarehouseSourceSceneProps {
     id: string
 }
 
+export function getDefaultDataWarehouseSourceSceneTab(id?: string): DataWarehouseSourceSceneTab {
+    return id && isSelfManagedSourceId(id) ? 'configuration' : 'schemas'
+}
+
+export function isManagedSourceSceneId(id: string): boolean {
+    return !isSelfManagedSourceId(id)
+}
+
 export const dataWarehouseSourceSceneLogic = kea<dataWarehouseSourceSceneLogicType>([
     props({} as DataWarehouseSourceSceneProps),
     key(({ id }: DataWarehouseSourceSceneProps) => id),
@@ -42,7 +50,7 @@ export const dataWarehouseSourceSceneLogic = kea<dataWarehouseSourceSceneLogicTy
     }),
     reducers(() => ({
         currentTab: [
-            'configuration' as DataWarehouseSourceSceneTab,
+            'schemas' as DataWarehouseSourceSceneTab,
             {
                 setCurrentTab: (_, { tab }) => tab,
                 // dont trigger actionToUrl
@@ -85,7 +93,7 @@ export const dataWarehouseSourceSceneLogic = kea<dataWarehouseSourceSceneLogicTy
                           activity_scope: ActivityScope.EXTERNAL_DATA_SOURCE,
                           activity_item_id: id,
                           // Only managed sources have access control, self-managed sources do not
-                          ...(isManagedSourceId(props.id)
+                          ...(isManagedSourceSceneId(props.id)
                               ? {
                                     access_control_resource: 'external_data_source',
                                     access_control_resource_id: id,
@@ -104,13 +112,14 @@ export const dataWarehouseSourceSceneLogic = kea<dataWarehouseSourceSceneLogicTy
     urlToAction(({ actions, values }) => {
         return {
             [urls.dataWarehouseSource(':id', ':tab' as any)]: (params): void => {
-                let possibleTab = (params.tab ?? 'configuration') as DataWarehouseSourceSceneTab
+                const defaultTab = getDefaultDataWarehouseSourceSceneTab(params.id)
+                let possibleTab = (params.tab ?? defaultTab) as DataWarehouseSourceSceneTab
 
                 if (params.id && isSelfManagedSourceId(params.id)) {
                     possibleTab = 'configuration' // This only has one tab
                 }
 
-                const tab = DATA_WAREHOUSE_SOURCE_SCENE_TABS.includes(possibleTab) ? possibleTab : 'configuration'
+                const tab = DATA_WAREHOUSE_SOURCE_SCENE_TABS.includes(possibleTab) ? possibleTab : defaultTab
                 if (tab !== values.currentTab) {
                     actions._setCurrentTab(tab)
                 }
@@ -136,6 +145,7 @@ export function DataWarehouseSourceScene(): JSX.Element {
     }
 
     const sourceId = cleanSourceId(id)
+    const isSelfManagedSource = isSelfManagedSourceId(id)
 
     return (
         <SceneContent>
@@ -144,11 +154,11 @@ export function DataWarehouseSourceScene(): JSX.Element {
                 resourceType={{ type: 'data_pipeline' }}
                 isLoading={breadcrumbName === 'Source'}
             />
-            {isManagedSourceId(id) ? (
+            {isManagedSourceSceneId(id) ? (
                 <ManagedSourceTabs sourceId={sourceId} currentTab={currentTab} setCurrentTab={setCurrentTab} />
             ) : (
                 <LemonTabs
-                    activeKey={currentTab}
+                    activeKey={isSelfManagedSource ? 'configuration' : currentTab}
                     tabs={[
                         {
                             label: 'Configuration',

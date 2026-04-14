@@ -141,8 +141,12 @@ def direct_postgres_session_setup_sql(
 ) -> str:
     quoted_schema = escape_postgres_identifier(schema)
     engine = connection_metadata.get("engine") if isinstance(connection_metadata, dict) else None
+    database = connection_metadata.get("database") if isinstance(connection_metadata, dict) else None
 
     if engine == "duckdb" or (host is not None and host.endswith(".postwh.com")):
+        if isinstance(database, str) and database.strip():
+            quoted_database = escape_postgres_identifier(database.strip())
+            return f"USE {quoted_database}.{quoted_schema}"
         return f"USE {quoted_schema}"
 
     return f"SET search_path TO {quoted_schema}"

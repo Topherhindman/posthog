@@ -8,6 +8,7 @@ import { lemonToast } from '@posthog/lemon-ui'
 import api from 'lib/api'
 import { FEATURE_FLAGS } from 'lib/constants'
 import { featureFlagLogic } from 'lib/logic/featureFlagLogic'
+import { objectsEqual } from 'lib/utils'
 import { availableSourcesDataLogic } from 'scenes/data-warehouse/new/availableSourcesDataLogic'
 import {
     SSH_FIELD,
@@ -34,6 +35,84 @@ export interface DataWarehouseSourceSettingsLogicProps {
 }
 
 const REFRESH_INTERVAL = 5000
+const SCHEMA_UPDATE_DEBOUNCE_MS = 1000
+
+interface PendingSchemaUpdate {
+    revision: number
+    schema: ExternalDataSourceSchema
+}
+
+interface SchemaUpdateCache {
+    pendingSchemaUpdates?: Record<string, PendingSchemaUpdate>
+    inFlightSchemaUpdates?: Record<string, PendingSchemaUpdate>
+    schemaUpdateRevisions?: Record<string, number>
+    schemaUpdateTimers?: Record<string, ReturnType<typeof setTimeout>>
+    reapplyingOptimisticSource?: boolean
+}
+
+function applySchemaToSource(
+    source: ExternalDataSource | null,
+    schema: ExternalDataSourceSchema
+): ExternalDataSource | null {
+    if (!source) {
+        return source
+    }
+
+    const clonedSource = JSON.parse(JSON.stringify(source)) as ExternalDataSource
+    const schemaIndex = clonedSource.schemas.findIndex((item) => item.id === schema.id)
+
+    if (schemaIndex === -1) {
+        return source
+    }
+
+    clonedSource.schemas[schemaIndex] = schema
+    return clonedSource
+}
+
+function applyPendingSchemaUpdatesToSource(
+    source: ExternalDataSource | null,
+    pendingSchemaUpdates: Record<string, PendingSchemaUpdate>
+): ExternalDataSource | null {
+    if (!source) {
+        return source
+    }
+
+    return Object.values(pendingSchemaUpdates).reduce<ExternalDataSource | null>(
+        (currentSource, pendingUpdate) => applySchemaToSource(currentSource, pendingUpdate.schema),
+        source
+    )
+}
+
+function getSchemaUpdateCache(cache: SchemaUpdateCache): Required<SchemaUpdateCache> {
+    cache.pendingSchemaUpdates ??= {}
+    cache.inFlightSchemaUpdates ??= {}
+    cache.schemaUpdateRevisions ??= {}
+    cache.schemaUpdateTimers ??= {}
+    cache.reapplyingOptimisticSource ??= false
+
+    return cache as Required<SchemaUpdateCache>
+}
+
+function getOptimisticSchemaUpdates(cache: Required<SchemaUpdateCache>): Record<string, PendingSchemaUpdate> {
+    return {
+        ...cache.inFlightSchemaUpdates,
+        ...cache.pendingSchemaUpdates,
+    }
+}
+
+function hasOptimisticSchemaChanges(
+    source: ExternalDataSource | null,
+    optimisticSchemaUpdates: Record<string, PendingSchemaUpdate>
+): boolean {
+    if (!source) {
+        return false
+    }
+
+    return Object.values(optimisticSchemaUpdates).some(({ schema }) => {
+        const currentSchema = source.schemas.find((item) => item.id === schema.id)
+        return !!currentSchema && !objectsEqual(currentSchema, schema)
+    })
+}
 
 const isSensitiveCredentialField = (field: SourceFieldConfig): boolean => {
     return field.type === 'password' || field.name === 'private_key'
@@ -100,6 +179,12 @@ export const dataWarehouseSourceSettingsLogic = kea<dataWarehouseSourceSettingsL
         setSyncingNow: (syncing: boolean) => ({ syncing }),
         refreshSchemas: true,
         setRefreshingSchemas: (refreshing: boolean) => ({ refreshing }),
+        updateSchema: (schema: ExternalDataSourceSchema) => schema,
+        updateSchemaSuccess: (source: ExternalDataSource | null, payload?: ExternalDataSourceSchema) => ({
+            source,
+            payload,
+        }),
+        updateSchemaFailure: (error: string, errorObject?: any) => ({ error, errorObject }),
     }),
     loaders(({ actions, values }) => ({
         source: [
@@ -107,24 +192,6 @@ export const dataWarehouseSourceSettingsLogic = kea<dataWarehouseSourceSettingsL
             {
                 loadSource: async () => {
                     return await api.externalDataSources.get(values.sourceId)
-                },
-                updateSchema: async (schema: ExternalDataSourceSchema) => {
-                    // Optimistic UI updates before sending updates to the backend
-                    const clonedSource = JSON.parse(JSON.stringify(values.source)) as ExternalDataSource
-                    const schemaIndex = clonedSource.schemas.findIndex((n) => n.id === schema.id)
-                    clonedSource.schemas[schemaIndex] = schema
-                    actions.loadSourceSuccess(clonedSource)
-
-                    const updatedSchema = await api.externalDataSchemas.update(schema.id, {
-                        ...schema,
-                    })
-
-                    const source = values.source
-                    if (schemaIndex !== undefined) {
-                        source!.schemas[schemaIndex] = updatedSchema
-                    }
-
-                    return source
                 },
             },
         ],
@@ -331,188 +398,281 @@ export const dataWarehouseSourceSettingsLogic = kea<dataWarehouseSourceSettingsL
             },
         },
     })),
-    listeners(({ values, actions, props, cache }) => ({
-        loadSourceSuccess: () => {
-            const isDirectQueryEnabled = !!featureFlagLogic.values.featureFlags[FEATURE_FLAGS.DWH_POSTGRES_DIRECT_QUERY]
-            cache.disposables.add(() => {
-                const timerId = setTimeout(() => {
-                    actions.loadSource()
-                }, REFRESH_INTERVAL)
-                return () => clearTimeout(timerId)
-            }, 'sourceRefreshTimeout')
+    listeners(({ values, actions, props, cache }) => {
+        const schemaUpdateCache = getSchemaUpdateCache(cache)
 
-            dataWarehouseSourceSceneLogic
-                .findMounted({
-                    id: `managed-${props.id}`,
-                })
-                ?.actions.setBreadcrumbName(
+        const scheduleSchemaUpdateFlush = (schemaId: string): void => {
+            const existingTimer = schemaUpdateCache.schemaUpdateTimers[schemaId]
+            if (existingTimer) {
+                clearTimeout(existingTimer)
+            }
+
+            schemaUpdateCache.schemaUpdateTimers[schemaId] = setTimeout(() => {
+                delete schemaUpdateCache.schemaUpdateTimers[schemaId]
+
+                if (schemaUpdateCache.inFlightSchemaUpdates[schemaId]) {
+                    scheduleSchemaUpdateFlush(schemaId)
+                    return
+                }
+
+                const pendingUpdate = schemaUpdateCache.pendingSchemaUpdates[schemaId]
+                if (!pendingUpdate) {
+                    return
+                }
+
+                delete schemaUpdateCache.pendingSchemaUpdates[schemaId]
+                schemaUpdateCache.inFlightSchemaUpdates[schemaId] = pendingUpdate
+
+                void (async () => {
+                    try {
+                        const updatedSchema = await api.externalDataSchemas.update(schemaId, pendingUpdate.schema)
+                        const latestPendingUpdate = schemaUpdateCache.pendingSchemaUpdates[schemaId]
+
+                        delete schemaUpdateCache.inFlightSchemaUpdates[schemaId]
+                        actions.updateSchemaSuccess(values.source, updatedSchema)
+
+                        if (latestPendingUpdate && latestPendingUpdate.revision > pendingUpdate.revision) {
+                            scheduleSchemaUpdateFlush(schemaId)
+                            return
+                        }
+
+                        const nextSource = applySchemaToSource(values.source, updatedSchema)
+                        if (nextSource) {
+                            actions.loadSourceSuccess(nextSource)
+                        }
+                    } catch (error: any) {
+                        delete schemaUpdateCache.inFlightSchemaUpdates[schemaId]
+
+                        const latestPendingUpdate = schemaUpdateCache.pendingSchemaUpdates[schemaId]
+                        if (latestPendingUpdate && latestPendingUpdate.revision > pendingUpdate.revision) {
+                            scheduleSchemaUpdateFlush(schemaId)
+                            return
+                        }
+
+                        actions.updateSchemaFailure(error?.message || "Can't update schema at this time", error)
+                        actions.loadSource()
+                        lemonToast.error(error?.message || "Can't update schema at this time")
+                    }
+                })()
+            }, SCHEMA_UPDATE_DEBOUNCE_MS)
+        }
+
+        return {
+            updateSchema: (schema) => {
+                const nextRevision = (schemaUpdateCache.schemaUpdateRevisions[schema.id] ?? 0) + 1
+
+                schemaUpdateCache.schemaUpdateRevisions[schema.id] = nextRevision
+                schemaUpdateCache.pendingSchemaUpdates[schema.id] = { schema, revision: nextRevision }
+
+                const optimisticSource = applyPendingSchemaUpdatesToSource(
+                    values.source,
+                    getOptimisticSchemaUpdates(schemaUpdateCache)
+                )
+                if (optimisticSource) {
+                    schemaUpdateCache.reapplyingOptimisticSource = true
+                    actions.loadSourceSuccess(optimisticSource)
+                }
+
+                scheduleSchemaUpdateFlush(schema.id)
+            },
+            loadSourceSuccess: () => {
+                const optimisticSchemaUpdates = getOptimisticSchemaUpdates(schemaUpdateCache)
+
+                if (schemaUpdateCache.reapplyingOptimisticSource) {
+                    schemaUpdateCache.reapplyingOptimisticSource = false
+                } else if (hasOptimisticSchemaChanges(values.source, optimisticSchemaUpdates)) {
+                    const optimisticSource = applyPendingSchemaUpdatesToSource(values.source, optimisticSchemaUpdates)
+                    if (optimisticSource) {
+                        schemaUpdateCache.reapplyingOptimisticSource = true
+                        actions.loadSourceSuccess(optimisticSource)
+                        return
+                    }
+                }
+
+                const isDirectQueryEnabled =
+                    !!featureFlagLogic.values.featureFlags[FEATURE_FLAGS.DWH_POSTGRES_DIRECT_QUERY]
+                const breadcrumbName =
                     isDirectQueryEnabled && values.source?.access_method === 'direct'
                         ? values.source?.prefix || values.source?.source_type || 'Source'
                         : values.source?.source_type || 'Source'
-                )
-        },
-        loadSourceFailure: () => {
-            cache.disposables.add(() => {
-                const timerId = setTimeout(() => {
+                cache.disposables.add(() => {
+                    const timerId = setTimeout(() => {
+                        actions.loadSource()
+                    }, REFRESH_INTERVAL)
+                    return () => clearTimeout(timerId)
+                }, 'sourceRefreshTimeout')
+
+                const mountedSceneLogic =
+                    dataWarehouseSourceSceneLogic.findMounted({ id: props.id }) ??
+                    dataWarehouseSourceSceneLogic.findMounted({ id: `managed-${props.id}` })
+
+                mountedSceneLogic?.actions.setBreadcrumbName(breadcrumbName)
+            },
+            loadSourceFailure: () => {
+                cache.disposables.add(() => {
+                    const timerId = setTimeout(() => {
+                        actions.loadSource()
+                    }, REFRESH_INTERVAL)
+                    return () => clearTimeout(timerId)
+                }, 'sourceRefreshTimeout')
+            },
+            refreshSchemas: async () => {
+                try {
+                    const { added = 0, deleted = 0 } = await api.externalDataSources.refreshSchemas(values.sourceId)
                     actions.loadSource()
-                }, REFRESH_INTERVAL)
-                return () => clearTimeout(timerId)
-            }, 'sourceRefreshTimeout')
-        },
-        refreshSchemas: async () => {
-            try {
-                const { added = 0, deleted = 0 } = await api.externalDataSources.refreshSchemas(values.sourceId)
-                actions.loadSource()
-                posthog.capture('schemas refreshed', {
-                    sourceType: values.source?.source_type,
-                    added,
-                    deleted,
-                })
-                const parts = ['Schemas refreshed']
-                if (added > 0 || deleted > 0) {
-                    parts.push(
-                        [added > 0 ? `${added} added` : null, deleted > 0 ? `${deleted} deleted` : null]
-                            .filter(Boolean)
-                            .join(' / ')
-                    )
+                    posthog.capture('schemas refreshed', {
+                        sourceType: values.source?.source_type,
+                        added,
+                        deleted,
+                    })
+                    const parts = ['Schemas refreshed']
+                    if (added > 0 || deleted > 0) {
+                        parts.push(
+                            [added > 0 ? `${added} added` : null, deleted > 0 ? `${deleted} deleted` : null]
+                                .filter(Boolean)
+                                .join(' / ')
+                        )
+                    }
+                    lemonToast.success(parts.join(', '))
+                } catch (e: any) {
+                    if (e.message) {
+                        lemonToast.error(e.message)
+                    } else {
+                        lemonToast.error("Can't refresh schemas at this time")
+                    }
+                } finally {
+                    actions.setRefreshingSchemas(false)
                 }
-                lemonToast.success(parts.join(', '))
-            } catch (e: any) {
-                if (e.message) {
-                    lemonToast.error(e.message)
-                } else {
-                    lemonToast.error("Can't refresh schemas at this time")
-                }
-            } finally {
-                actions.setRefreshingSchemas(false)
-            }
-        },
-        setSelectedSchemas: () => {
-            // Reset jobs so loadJobs fetches fresh data for the new filter
-            // instead of merging with stale results from a different selection
-            actions.loadJobsSuccess([])
-            actions.setCanLoadMoreJobs(true)
-            actions.loadJobs()
-        },
-        loadJobsSuccess: () => {
-            cache.disposables.add(() => {
-                const timerId = setTimeout(() => {
-                    actions.loadJobs()
-                }, REFRESH_INTERVAL)
-                return () => clearTimeout(timerId)
-            }, 'jobsRefreshTimeout')
-        },
-        loadJobsFailure: () => {
-            cache.disposables.add(() => {
-                const timerId = setTimeout(() => {
-                    actions.loadJobs()
-                }, REFRESH_INTERVAL)
-                return () => clearTimeout(timerId)
-            }, 'jobsRefreshTimeout')
-        },
-        syncNow: async () => {
-            try {
-                await api.externalDataSources.reload(values.sourceId)
-                actions.loadSource()
+            },
+            setSelectedSchemas: () => {
+                // Reset jobs so loadJobs fetches fresh data for the new filter
+                // instead of merging with stale results from a different selection
+                actions.loadJobsSuccess([])
+                actions.setCanLoadMoreJobs(true)
                 actions.loadJobs()
-                lemonToast.success('Sync started')
-                posthog.capture('sync now triggered', { sourceType: values.source?.source_type })
-            } catch (e: any) {
-                lemonToast.error(e.message || "Can't start sync at this time")
-            } finally {
-                actions.setSyncingNow(false)
-            }
-        },
-        reloadSchema: async ({ schema }) => {
-            // Optimistic UI updates before sending updates to the backend
-            const clonedSource = JSON.parse(JSON.stringify(values.source)) as ExternalDataSource
-            const schemaIndex = clonedSource.schemas.findIndex((n) => n.id === schema.id)
-            clonedSource.status = ExternalDataJobStatus.Running
-            clonedSource.schemas[schemaIndex].status = ExternalDataSchemaStatus.Running
-
-            actions.loadSourceSuccess(clonedSource)
-
-            try {
-                await api.externalDataSchemas.reload(schema.id)
-
-                posthog.capture('schema reloaded', { sourceType: clonedSource.source_type })
-            } catch (e: any) {
-                if (e.message) {
-                    lemonToast.error(e.message)
-                } else {
-                    lemonToast.error('Cant reload schema at this time')
+            },
+            loadJobsSuccess: () => {
+                cache.disposables.add(() => {
+                    const timerId = setTimeout(() => {
+                        actions.loadJobs()
+                    }, REFRESH_INTERVAL)
+                    return () => clearTimeout(timerId)
+                }, 'jobsRefreshTimeout')
+            },
+            loadJobsFailure: () => {
+                cache.disposables.add(() => {
+                    const timerId = setTimeout(() => {
+                        actions.loadJobs()
+                    }, REFRESH_INTERVAL)
+                    return () => clearTimeout(timerId)
+                }, 'jobsRefreshTimeout')
+            },
+            syncNow: async () => {
+                try {
+                    await api.externalDataSources.reload(values.sourceId)
+                    actions.loadSource()
+                    actions.loadJobs()
+                    lemonToast.success('Sync started')
+                    posthog.capture('sync now triggered', { sourceType: values.source?.source_type })
+                } catch (e: any) {
+                    lemonToast.error(e.message || "Can't start sync at this time")
+                } finally {
+                    actions.setSyncingNow(false)
                 }
-            }
-        },
-        resyncSchema: async ({ schema }) => {
-            // Optimistic UI updates before sending updates to the backend
-            const clonedSource = JSON.parse(JSON.stringify(values.source)) as ExternalDataSource
-            const schemaIndex = clonedSource.schemas.findIndex((n) => n.id === schema.id)
-            clonedSource.status = ExternalDataJobStatus.Running
-            clonedSource.schemas[schemaIndex].status = ExternalDataSchemaStatus.Running
+            },
+            reloadSchema: async ({ schema }) => {
+                // Optimistic UI updates before sending updates to the backend
+                const clonedSource = JSON.parse(JSON.stringify(values.source)) as ExternalDataSource
+                const schemaIndex = clonedSource.schemas.findIndex((n) => n.id === schema.id)
+                clonedSource.status = ExternalDataJobStatus.Running
+                clonedSource.schemas[schemaIndex].status = ExternalDataSchemaStatus.Running
 
-            actions.loadSourceSuccess(clonedSource)
+                actions.loadSourceSuccess(clonedSource)
 
-            try {
-                await api.externalDataSchemas.resync(schema.id)
+                try {
+                    await api.externalDataSchemas.reload(schema.id)
 
-                posthog.capture('schema resynced', { sourceType: clonedSource.source_type })
-            } catch (e: any) {
-                if (e.message) {
-                    lemonToast.error(e.message)
-                } else {
-                    lemonToast.error('Cant refresh schema at this time')
+                    posthog.capture('schema reloaded', { sourceType: clonedSource.source_type })
+                } catch (e: any) {
+                    if (e.message) {
+                        lemonToast.error(e.message)
+                    } else {
+                        lemonToast.error('Cant reload schema at this time')
+                    }
                 }
-            }
-        },
-        cancelSchema: async ({ schema }) => {
-            try {
-                await api.externalDataSchemas.cancel(schema.id)
+            },
+            resyncSchema: async ({ schema }) => {
+                // Optimistic UI updates before sending updates to the backend
+                const clonedSource = JSON.parse(JSON.stringify(values.source)) as ExternalDataSource
+                const schemaIndex = clonedSource.schemas.findIndex((n) => n.id === schema.id)
+                clonedSource.status = ExternalDataJobStatus.Running
+                clonedSource.schemas[schemaIndex].status = ExternalDataSchemaStatus.Running
 
-                actions.loadSource()
-                posthog.capture('schema sync cancelled', { sourceType: values.source?.source_type })
-                lemonToast.success('Sync cancelled')
-            } catch (e: any) {
-                if (e.message) {
-                    lemonToast.error(e.message)
-                } else {
-                    lemonToast.error("Can't cancel sync at this time")
+                actions.loadSourceSuccess(clonedSource)
+
+                try {
+                    await api.externalDataSchemas.resync(schema.id)
+
+                    posthog.capture('schema resynced', { sourceType: clonedSource.source_type })
+                } catch (e: any) {
+                    if (e.message) {
+                        lemonToast.error(e.message)
+                    } else {
+                        lemonToast.error('Cant refresh schema at this time')
+                    }
                 }
-            }
-        },
-        deleteTable: async ({ schema }) => {
-            // Optimistic UI updates before sending updates to the backend
-            const clonedSource = JSON.parse(JSON.stringify(values.source)) as ExternalDataSource
-            const schemaIndex = clonedSource.schemas.findIndex((n) => n.id === schema.id)
-            if (schemaIndex === -1) {
-                lemonToast.error('Schema not found')
-                return
-            }
-            clonedSource.schemas[schemaIndex].table = undefined
-            clonedSource.schemas[schemaIndex].status = undefined
-            clonedSource.schemas[schemaIndex].last_synced_at = undefined
-            actions.loadSourceSuccess(clonedSource)
+            },
+            cancelSchema: async ({ schema }) => {
+                try {
+                    await api.externalDataSchemas.cancel(schema.id)
 
-            try {
-                await api.externalDataSchemas.delete_data(schema.id)
-
-                posthog.capture('schema data deleted', { sourceType: clonedSource.source_type })
-                lemonToast.success(`Data for ${schema.label ?? schema.name} has been deleted`)
-            } catch (e: any) {
-                if (e.message) {
-                    lemonToast.error(e.message)
-                } else {
-                    lemonToast.error("Can't delete data at this time")
+                    actions.loadSource()
+                    posthog.capture('schema sync cancelled', { sourceType: values.source?.source_type })
+                    lemonToast.success('Sync cancelled')
+                } catch (e: any) {
+                    if (e.message) {
+                        lemonToast.error(e.message)
+                    } else {
+                        lemonToast.error("Can't cancel sync at this time")
+                    }
                 }
-            }
-        },
-    })),
+            },
+            deleteTable: async ({ schema }) => {
+                // Optimistic UI updates before sending updates to the backend
+                const clonedSource = JSON.parse(JSON.stringify(values.source)) as ExternalDataSource
+                const schemaIndex = clonedSource.schemas.findIndex((n) => n.id === schema.id)
+                if (schemaIndex === -1) {
+                    lemonToast.error('Schema not found')
+                    return
+                }
+                clonedSource.schemas[schemaIndex].table = undefined
+                clonedSource.schemas[schemaIndex].status = undefined
+                clonedSource.schemas[schemaIndex].last_synced_at = undefined
+                actions.loadSourceSuccess(clonedSource)
+
+                try {
+                    await api.externalDataSchemas.delete_data(schema.id)
+
+                    posthog.capture('schema data deleted', { sourceType: clonedSource.source_type })
+                    lemonToast.success(`Data for ${schema.label ?? schema.name} has been deleted`)
+                } catch (e: any) {
+                    if (e.message) {
+                        lemonToast.error(e.message)
+                    } else {
+                        lemonToast.error("Can't delete data at this time")
+                    }
+                }
+            },
+        }
+    }),
     afterMount(({ actions }) => {
         actions.loadSource()
         actions.loadJobs()
     }),
 
-    beforeUnmount(() => {
-        // Disposables handle cleanup automatically
+    beforeUnmount(({ cache }) => {
+        const schemaUpdateCache = getSchemaUpdateCache(cache)
+
+        Object.values(schemaUpdateCache.schemaUpdateTimers).forEach(clearTimeout)
     }),
 ])

@@ -66,6 +66,12 @@ class TestDirectPostgresQuery(APIBaseTest):
             "USE posthog",
         )
 
+    def test_direct_postgres_session_setup_sql_uses_catalog_and_schema_for_duckdb(self):
+        self.assertEqual(
+            direct_postgres_session_setup_sql("system", {"engine": "duckdb", "database": "ducklake"}),
+            "USE ducklake.system",
+        )
+
     def test_direct_postgres_session_setup_sql_treats_postwh_hosts_as_duckdb(self):
         self.assertEqual(
             direct_postgres_session_setup_sql("posthog", host="db.eu.postwh.com"),
@@ -640,6 +646,50 @@ class TestDirectPostgresQuery(APIBaseTest):
             f"USE {escape_postgres_identifier(source.job_inputs['schema'])}"
         )
         mocked_connection.adapters.register_loader.assert_any_call("date", LenientDirectPostgresDateLoader)
+
+    @patch("posthog.hogql.query.psycopg.connect")
+    def test_send_raw_query_uses_catalog_and_schema_for_duckdb_when_available(self, mock_connect):
+        source = ExternalDataSource.objects.create(
+            team=self.team,
+            source_id="source_id",
+            connection_id="connection_id",
+            status=ExternalDataSource.Status.COMPLETED,
+            source_type="Postgres",
+            access_method=ExternalDataSource.AccessMethod.DIRECT,
+            prefix="ph3",
+            job_inputs={
+                "host": "localhost",
+                "port": 5432,
+                "database": "postgres",
+                "user": "postgres",
+                "password": "postgres",
+                "schema": "system",
+            },
+            connection_metadata={"engine": "duckdb", "database": "ducklake"},
+        )
+
+        mocked_cursor = MagicMock()
+        mocked_cursor.fetchall.return_value = [(1,)]
+        column = MagicMock(type_code=23)
+        column.name = "value"
+        mocked_cursor.description = [column]
+        mocked_connection = MagicMock()
+        mocked_connection.cursor.return_value.__enter__.return_value = mocked_cursor
+        mock_connect.return_value.__enter__.return_value = mocked_connection
+
+        executor = HogQLQueryExecutor(
+            query="SELECT 1 AS value",
+            team=self.team,
+            connection_id=str(source.id),
+            send_raw_query=True,
+        )
+
+        response = executor.execute()
+
+        self.assertEqual(response.results, [(1,)])
+        mocked_connection.execute.assert_called_once_with(
+            f"USE {escape_postgres_identifier('ducklake')}.{escape_postgres_identifier(source.job_inputs['schema'])}"
+        )
 
     @patch("posthog.hogql.query.capture_exception")
     @patch("posthog.hogql.query.psycopg.connect")

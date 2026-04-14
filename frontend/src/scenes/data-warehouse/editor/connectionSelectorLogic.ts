@@ -5,6 +5,7 @@ import api from 'lib/api'
 import { FEATURE_FLAGS } from 'lib/constants'
 import { featureFlagLogic } from 'lib/logic/featureFlagLogic'
 import { externalDataSourcesLogic } from 'scenes/data-warehouse/externalDataSourcesLogic'
+import { urls } from 'scenes/urls'
 
 import type { ExternalDataSourceConnectionOption } from '~/types'
 
@@ -28,6 +29,7 @@ export interface ConnectionSelectOption {
     label: string
     disabled?: boolean
     iconSrc?: string
+    managementUrl?: string
 }
 
 export interface ConnectionSelectOptionGroup {
@@ -83,6 +85,7 @@ export const connectionSelectorLogic = kea<connectionSelectorLogicType>([
                               value: source.id,
                               label: `${source.prefix ? source.prefix : source.id} (${engine === 'duckdb' ? 'DuckDB' : 'Postgres'})`,
                               iconSrc: engine === 'duckdb' ? IconDuckDB : IconPostgres,
+                              managementUrl: urls.dataWarehouseSource(`managed-${source.id}`),
                           }
                       })
 
