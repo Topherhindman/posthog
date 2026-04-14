@@ -22,11 +22,15 @@ import { lemonToast } from 'lib/lemon-ui/LemonToast/LemonToast'
 import { eventUsageLogic } from 'lib/utils/eventUsageLogic'
 import { definitionEditLogic } from 'scenes/data-management/definition/definitionEditLogic'
 import { DefinitionLogicProps, definitionLogic } from 'scenes/data-management/definition/definitionLogic'
+import { PropertyAccessControl } from 'scenes/data-management/definition/PropertyAccessControl'
 import { preflightLogic } from 'scenes/PreflightCheck/preflightLogic'
 import { SceneExport } from 'scenes/sceneTypes'
+import { teamLogic } from 'scenes/teamLogic'
 import { urls } from 'scenes/urls'
 
 import { SceneContent } from '~/layout/scenes/components/SceneContent'
+import { SceneDivider } from '~/layout/scenes/components/SceneDivider'
+import { SceneSection } from '~/layout/scenes/components/SceneSection'
 import { SceneTitleSection } from '~/layout/scenes/components/SceneTitleSection'
 import { tagsModel } from '~/models/tagsModel'
 import { isCoreFilter } from '~/taxonomy/helpers'
@@ -47,6 +51,7 @@ export function DefinitionEdit(props: DefinitionLogicProps): JSX.Element {
     const { editDefinition } = useValues(logic)
     const { saveDefinition } = useActions(logic)
     const { tags, tagsLoading } = useValues(tagsModel)
+    const { currentTeamId } = useValues(teamLogic)
     const { objectStorageAvailable } = useValues(preflightLogic)
     const { reportMediaPreviewUploaded } = useActions(eventUsageLogic)
 
@@ -267,6 +272,21 @@ export function DefinitionEdit(props: DefinitionLogicProps): JSX.Element {
                             </div>
                         )}
                     </div>
+                )}
+
+                {isProperty && editDefinition.id !== 'new' && currentTeamId && (
+                    <>
+                        <SceneDivider />
+                        <SceneSection
+                            title="Access control"
+                            description="Control who can view and modify this property."
+                        >
+                            <PropertyAccessControl
+                                propertyDefinitionId={String(editDefinition.id)}
+                                teamId={currentTeamId}
+                            />
+                        </SceneSection>
+                    </>
                 )}
             </SceneContent>
         </Form>

@@ -8,8 +8,10 @@ import api from 'lib/api'
 import { lemonToast } from 'lib/lemon-ui/LemonToast/LemonToast'
 import { capitalizeFirstLetter } from 'lib/utils'
 import { DefinitionLogicProps, definitionLogic } from 'scenes/data-management/definition/definitionLogic'
+import { propertyAccessControlLogic } from 'scenes/data-management/definition/propertyAccessControlLogic'
 import { eventDefinitionsTableLogic } from 'scenes/data-management/events/eventDefinitionsTableLogic'
 import { propertyDefinitionsTableLogic } from 'scenes/data-management/properties/propertyDefinitionsTableLogic'
+import { teamLogic } from 'scenes/teamLogic'
 import { urls } from 'scenes/urls'
 
 import { updatePropertyDefinitions } from '~/models/propertyDefinitionsModel'
@@ -74,6 +76,18 @@ export const definitionEditLogic = kea<definitionEditLogicType>([
                         updatePropertyDefinitions({
                             [`event/${definition.name}`]: definition as PropertyDefinition,
                         })
+
+                        // Save field access control changes if any
+                        const currentTeamId = teamLogic.values.currentTeamId
+                        if (currentTeamId) {
+                            const facLogic = propertyAccessControlLogic({
+                                propertyDefinitionId: String(definition.id),
+                                teamId: currentTeamId,
+                            })
+                            if (facLogic.values.hasChanges) {
+                                facLogic.actions.saveAccessControls()
+                            }
+                        }
                     }
                     breakpoint()
 
