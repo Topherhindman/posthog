@@ -1225,6 +1225,31 @@ export const getInitialExpandedFolders = (connectionId: string | null, displayed
     )
 }
 
+export const shouldInitializeDirectConnectionExpandedFolders = (
+    displayedTreeData: TreeDataItem[],
+    currentExpandedFolders?: string[]
+): boolean => {
+    if (currentExpandedFolders === undefined) {
+        return true
+    }
+
+    const schemaFolderIds = displayedTreeData
+        .filter((item) => item.record?.type === 'source-folder')
+        .map((item) => item.id)
+
+    if (schemaFolderIds.length === 0) {
+        return false
+    }
+
+    const expandedFolderSet = new Set(currentExpandedFolders)
+    const hasExpandedSchemaFolder = schemaFolderIds.some((folderId) => expandedFolderSet.has(folderId))
+    const hasOnlyDefaultExpandedFolders =
+        currentExpandedFolders.length === DEFAULT_EXPANDED_FOLDERS.length &&
+        DEFAULT_EXPANDED_FOLDERS.every((folderId) => expandedFolderSet.has(folderId))
+
+    return !hasExpandedSchemaFolder && hasOnlyDefaultExpandedFolders
+}
+
 const findTreePath = (items: TreeDataItem[], targetId: string, path: TreeDataItem[] = []): TreeDataItem[] | null => {
     for (const item of items) {
         const nextPath = [...path, item]
@@ -2441,7 +2466,9 @@ export const queryDatabaseLogic = kea<queryDatabaseLogicType>([
             }
 
             const key = getExpandedFoldersConnectionKey(values.connectionId)
-            if (Object.prototype.hasOwnProperty.call(values.expandedFoldersByConnection, key)) {
+            const currentExpandedFolders = values.expandedFoldersByConnection[key]
+
+            if (!shouldInitializeDirectConnectionExpandedFolders(displayedTreeData, currentExpandedFolders)) {
                 return
             }
 

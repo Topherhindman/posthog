@@ -2962,6 +2962,110 @@ class TestExternalDataSource(APIBaseTest):
         assert matching_schema.sync_type_config["schema_metadata"]["source_schema"] == "analytics"
         assert filtered_out_schema.deleted is True
 
+    @patch("products.data_warehouse.backend.api.external_data_source.SourceRegistry.get_source")
+    def test_update_direct_postgres_schema_filter_preserves_selected_table_for_same_physical_schema(
+        self, mock_get_source
+    ):
+        source = ExternalDataSource.objects.create(
+            team_id=self.team.pk,
+            source_id=str(uuid.uuid4()),
+            connection_id=str(uuid.uuid4()),
+            destination_id=str(uuid.uuid4()),
+            source_type="Postgres",
+            access_method=ExternalDataSource.AccessMethod.DIRECT,
+            created_by=self.user,
+            prefix="Direct source",
+            job_inputs={
+                "host": "localhost",
+                "port": "5432",
+                "database": "database",
+                "user": "user",
+                "password": "password",
+            },
+        )
+        table = DataWarehouseTable.objects.create(
+            name="posthog.events",
+            format=DataWarehouseTable.TableFormat.Parquet,
+            team=self.team,
+            url_pattern=DIRECT_POSTGRES_URL_PATTERN,
+            external_data_source=source,
+            columns={"id": {"clickhouse": "Int32", "hogql": "integer", "valid": True}},
+            options={
+                "direct_postgres_schema": "posthog",
+                "direct_postgres_table": "events",
+            },
+        )
+        existing_schema = ExternalDataSchema.objects.create(
+            team_id=self.team.pk,
+            source_id=source.pk,
+            name="posthog.events",
+            should_sync=True,
+            table=table,
+            sync_type_config={
+                "schema_metadata": {
+                    "columns": [],
+                    "foreign_keys": [],
+                    "source_schema": "posthog",
+                    "source_table_name": "events",
+                }
+            },
+        )
+
+        parsed_config = Mock()
+        parsed_config.to_dict.return_value = {
+            "host": "localhost",
+            "port": "5432",
+            "database": "database",
+            "user": "user",
+            "password": "password",
+            "schema": "posthog",
+        }
+        mock_get_source.return_value.parse_config.return_value = parsed_config
+        mock_get_source.return_value.validate_config.return_value = (True, [])
+        mock_get_source.return_value.validate_credentials.return_value = (True, None)
+        mock_get_source.return_value.get_connection_metadata.return_value = {
+            "database": "database",
+            "engine": "postgres",
+        }
+        mock_get_source.return_value.get_schemas.return_value = [
+            SourceSchema(
+                name="events",
+                supports_incremental=False,
+                supports_append=False,
+                columns=[("id", "integer", False)],
+                foreign_keys=[],
+                source_schema="posthog",
+                source_table_name="events",
+            )
+        ]
+
+        response = self.client.patch(
+            f"/api/environments/{self.team.pk}/external_data_sources/{source.pk}/",
+            data={
+                "job_inputs": {
+                    "schema": "posthog",
+                }
+            },
+            format="json",
+        )
+
+        assert response.status_code == 200, response.json()
+        source.refresh_from_db()
+        existing_schema.refresh_from_db()
+        table.refresh_from_db()
+
+        assert source.job_inputs["schema"] == "posthog"
+        assert existing_schema.name == "events"
+        assert existing_schema.should_sync is True
+        assert existing_schema.deleted is False
+        assert existing_schema.table_id == table.id
+        assert table.deleted is False
+        assert table.name == "events"
+        assert table.options["direct_postgres_schema"] == "posthog"
+        assert table.options["direct_postgres_table"] == "events"
+        assert [schema["name"] for schema in response.json()["schemas"]] == ["events"]
+        assert ExternalDataSchema.objects.filter(team_id=self.team.pk, source_id=source.pk, deleted=False).count() == 1
+
     def test_update_source_cannot_change_access_method(self):
         source = ExternalDataSource.objects.create(
             team_id=self.team.pk,

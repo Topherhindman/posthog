@@ -64,6 +64,7 @@ from products.data_warehouse.backend.direct_postgres import (
     get_direct_postgres_location,
     postgres_schema_metadata,
     reconcile_direct_postgres_schemas,
+    rename_direct_postgres_schemas_to_match_source_schemas,
     upsert_direct_postgres_table,
 )
 from products.data_warehouse.backend.external_data_source.webhooks import (
@@ -606,6 +607,11 @@ class ExternalDataSourceSerializers(UserAccessControlSerializerMixin, serializer
 
             with transaction.atomic():
                 ExternalDataSource._base_manager.filter(pk=updated_source.pk).select_for_update().get()
+                rename_direct_postgres_schemas_to_match_source_schemas(
+                    source=updated_source,
+                    source_schemas=discovered_schemas,
+                    team_id=instance.team_id,
+                )
                 sync_old_schemas_with_new_schemas(
                     schema_names,
                     source_id=str(updated_source.id),

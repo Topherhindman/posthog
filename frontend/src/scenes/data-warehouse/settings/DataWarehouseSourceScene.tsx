@@ -29,7 +29,7 @@ import { SIDE_PANEL_CONTEXT_KEY, SidePanelSceneContext } from '~/layout/navigati
 import { SceneContent } from '~/layout/scenes/components/SceneContent'
 import { SceneTitleSection } from '~/layout/scenes/components/SceneTitleSection'
 import { ProductKey } from '~/queries/schema/schema-general'
-import { ActivityScope, Breadcrumb } from '~/types'
+import { ActivityScope, Breadcrumb, ExternalDataSource } from '~/types'
 
 import type { dataWarehouseSourceSceneLogicType } from './DataWarehouseSourceSceneType'
 import { dataWarehouseSourceSettingsLogic } from './source/dataWarehouseSourceSettingsLogic'
@@ -52,6 +52,13 @@ export function getDefaultDataWarehouseSourceSceneTab(id?: string): DataWarehous
 
 export function isManagedSourceSceneId(id: string): boolean {
     return !isSelfManagedSourceId(id)
+}
+
+export function shouldShowManagedSourceSyncsTab(
+    source: Pick<ExternalDataSource, 'access_method'> | null | undefined,
+    isDirectQueryEnabled: boolean
+): boolean {
+    return !!source && !(isDirectQueryEnabled && source.access_method === 'direct')
 }
 
 export const dataWarehouseSourceSceneLogic = kea<dataWarehouseSourceSceneLogicType>([
@@ -216,18 +223,20 @@ function ManagedSourceTabs({
 
     useAttachedLogic(sourceSettingsLogic, attachTo)
 
-    const isDirectQuerySource =
-        !!featureFlags[FEATURE_FLAGS.DWH_POSTGRES_DIRECT_QUERY] && source?.access_method === 'direct'
+    const showSyncsTab = shouldShowManagedSourceSyncsTab(
+        source,
+        !!featureFlags[FEATURE_FLAGS.DWH_POSTGRES_DIRECT_QUERY]
+    )
     const showWebhookTab = !!featureFlags[FEATURE_FLAGS.WAREHOUSE_SOURCE_WEBHOOKS] && !!source?.supports_webhooks
 
     useEffect(() => {
-        if (isDirectQuerySource && currentTab === 'syncs') {
+        if (!showSyncsTab && currentTab === 'syncs') {
             setCurrentTab('schemas')
         }
         if (!showWebhookTab && currentTab === 'webhook') {
             setCurrentTab('schemas')
         }
-    }, [isDirectQuerySource, showWebhookTab, currentTab, setCurrentTab])
+    }, [showSyncsTab, showWebhookTab, currentTab, setCurrentTab])
 
     const tabs: LemonTab<DataWarehouseSourceSceneTab>[] = [
         {
@@ -242,7 +251,7 @@ function ManagedSourceTabs({
         },
     ]
 
-    if (!isDirectQuerySource) {
+    if (showSyncsTab) {
         tabs.splice(1, 0, {
             label: 'Syncs',
             key: 'syncs',

@@ -2,6 +2,7 @@ import {
     getDefaultExpandedRootIds,
     getInitialExpandedFolders,
     groupDirectConnectionTableNodesBySchema,
+    shouldInitializeDirectConnectionExpandedFolders,
 } from './queryDatabaseLogic'
 
 describe('queryDatabaseLogic', () => {
@@ -147,5 +148,55 @@ describe('queryDatabaseLogic', () => {
                 },
             ] as any)
         ).toEqual(expect.arrayContaining(['schema-system', 'schema-public', 'views']))
+    })
+
+    it('reinitializes direct connection folders when only legacy defaults are expanded', () => {
+        expect(
+            shouldInitializeDirectConnectionExpandedFolders(
+                [
+                    {
+                        id: 'schema-system',
+                        name: 'system',
+                        type: 'node',
+                        record: { type: 'source-folder', sourceType: 'system' },
+                    },
+                    {
+                        id: 'schema-public',
+                        name: 'public',
+                        type: 'node',
+                        record: { type: 'source-folder', sourceType: 'public' },
+                    },
+                    {
+                        id: 'views',
+                        name: 'Views',
+                        type: 'node',
+                        record: { type: 'views' },
+                    },
+                ] as any,
+                ['sources', 'views', 'managed-views']
+            )
+        ).toEqual(true)
+    })
+
+    it('does not reinitialize direct connection folders after schema folders are already expanded', () => {
+        expect(
+            shouldInitializeDirectConnectionExpandedFolders(
+                [
+                    {
+                        id: 'schema-system',
+                        name: 'system',
+                        type: 'node',
+                        record: { type: 'source-folder', sourceType: 'system' },
+                    },
+                    {
+                        id: 'views',
+                        name: 'Views',
+                        type: 'node',
+                        record: { type: 'views' },
+                    },
+                ] as any,
+                ['views', 'schema-system']
+            )
+        ).toEqual(false)
     })
 })

@@ -86,12 +86,16 @@ export interface SchemasProps {
     availableSources?: DataWarehouseSourceSettingsLogicProps['availableSources']
 }
 
-export function splitDirectQuerySchemaName(name: string): { schemaName: string; tableName: string } {
+export function splitDirectQuerySchemaName(
+    name: string,
+    fallbackSchema?: string | null
+): { schemaName: string; tableName: string } {
     const firstDotIndex = name.indexOf('.')
 
     if (firstDotIndex === -1) {
+        const normalizedFallbackSchema = fallbackSchema?.trim()
         return {
-            schemaName: 'Unqualified',
+            schemaName: normalizedFallbackSchema || 'Unqualified',
             tableName: name,
         }
     }
@@ -103,10 +107,14 @@ export function splitDirectQuerySchemaName(name: string): { schemaName: string; 
 }
 
 export function groupDirectQuerySourceSchemasBySchema(
-    schemas: ExternalDataSourceSchema[]
+    schemas: ExternalDataSourceSchema[],
+    fallbackSchema?: string | null
 ): { schemaName: string; schemas: ExternalDataSourceSchema[] }[] {
     return Object.entries(
-        groupBy(schemas, (schema) => splitDirectQuerySchemaName(schema.table?.name ?? schema.name).schemaName)
+        groupBy(
+            schemas,
+            (schema) => splitDirectQuerySchemaName(schema.table?.name ?? schema.name, fallbackSchema).schemaName
+        )
     )
         .sort(([schemaA], [schemaB]) => schemaA.localeCompare(schemaB))
         .map(([schemaName, groupedSchemas]) => ({ schemaName, schemas: groupedSchemas }))
@@ -157,7 +165,8 @@ export const Schemas = ({ id, tabId, availableSources }: SchemasProps): JSX.Elem
     const { featureFlags } = useValues(featureFlagLogic)
     const isDirectQuerySource =
         !!featureFlags[FEATURE_FLAGS.DWH_POSTGRES_DIRECT_QUERY] && source?.access_method === 'direct'
-    const groupedDirectQuerySchemas = groupDirectQuerySourceSchemasBySchema(filteredSchemas)
+    const directQueryDefaultSchema = typeof source?.job_inputs?.schema === 'string' ? source.job_inputs.schema : null
+    const groupedDirectQuerySchemas = groupDirectQuerySourceSchemasBySchema(filteredSchemas, directQueryDefaultSchema)
 
     return (
         <>
@@ -361,7 +370,12 @@ function DirectQuerySchemaGroups({
                                 <div>
                                     {schemas.map((schema) => {
                                         const qualifiedName = schema.table?.name ?? schema.name
-                                        const { tableName } = splitDirectQuerySchemaName(qualifiedName)
+                                        const { tableName } = splitDirectQuerySchemaName(
+                                            qualifiedName,
+                                            typeof source?.job_inputs?.schema === 'string'
+                                                ? source.job_inputs.schema
+                                                : null
+                                        )
 
                                         return (
                                             <div
@@ -426,7 +440,8 @@ export const SchemaTable = ({
     const { currentTeam } = useValues(teamLogic)
     const { schemaReloadingById } = useValues(dataWarehouseSettingsLogic)
     const [initialLoad, setInitialLoad] = useState(true)
-    const groupedDirectQuerySchemas = groupDirectQuerySourceSchemasBySchema(schemas)
+    const directQueryDefaultSchema = typeof source?.job_inputs?.schema === 'string' ? source.job_inputs.schema : null
+    const groupedDirectQuerySchemas = groupDirectQuerySourceSchemasBySchema(schemas, directQueryDefaultSchema)
     const groupedSchemaKeys = groupedDirectQuerySchemas.map((group) => group.schemaName)
     const groupedSchemaKeysFingerprint = groupedSchemaKeys.join('|')
     const [expandedSchemaKeys, setExpandedSchemaKeys] = useState<string[]>([])

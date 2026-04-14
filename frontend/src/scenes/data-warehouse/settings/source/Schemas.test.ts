@@ -24,6 +24,13 @@ describe('Schemas', () => {
         })
     })
 
+    it('uses the selected source schema for unqualified direct query table names', () => {
+        expect(splitDirectQuerySchemaName('events', 'posthog')).toEqual({
+            schemaName: 'posthog',
+            tableName: 'events',
+        })
+    })
+
     it('groups direct query source schemas by schema name', () => {
         expect(
             groupDirectQuerySourceSchemasBySchema([
@@ -39,6 +46,15 @@ describe('Schemas', () => {
             {
                 schemaName: 'public',
                 schemas: [makeSchema('public.events')],
+            },
+        ])
+    })
+
+    it('groups unqualified direct query source schemas under the configured source schema', () => {
+        expect(groupDirectQuerySourceSchemasBySchema([makeSchema('events')], 'posthog')).toEqual([
+            {
+                schemaName: 'posthog',
+                schemas: [makeSchema('events')],
             },
         ])
     })

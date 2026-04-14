@@ -719,7 +719,6 @@ export const dataWarehouseSourceSettingsLogic = kea<dataWarehouseSourceSettingsL
     }),
     afterMount(({ actions }) => {
         actions.loadSource()
-        actions.loadJobs()
     }),
 
     beforeUnmount(({ cache }) => {

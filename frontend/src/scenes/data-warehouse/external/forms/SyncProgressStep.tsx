@@ -1,4 +1,5 @@
 import { useActions, useValues } from 'kea'
+import { router } from 'kea-router'
 
 import { IconWarning } from '@posthog/icons'
 import {
@@ -144,8 +145,11 @@ export const SyncProgressStep = (): JSX.Element => {
                         <LemonButton
                             className="my-1"
                             type="primary"
-                            onClick={cancelWizard}
-                            to={getPreviewQueryUrl(schema.table.name, sourceAccessMethod, sourceId)}
+                            onClick={() => {
+                                const previewUrl = getPreviewQueryUrl(schema.table.name, sourceAccessMethod, sourceId)
+                                cancelWizard()
+                                router.actions.push(previewUrl)
+                            }}
                         >
                             Query
                         </LemonButton>

@@ -54,6 +54,12 @@ export function getDirectQuerySelectionDescription(selectedSchema?: string | nul
     return "Query selected Postgres tables from within PostHog. Tables stay in the source database and are not synced into the data warehouse. You can't join data from these tables with other data in the PostHog warehouse. Enable each schema to choose which tables should be queryable."
 }
 
+export function getDefaultExpandedDirectQuerySchemaKeys(
+    groupedSchemas: { schemaName: string; tables: ExternalDataSourceSyncSchema[] }[]
+): string[] {
+    return groupedSchemas.map((group) => group.schemaName)
+}
+
 function getSchemaSelectionState(tables: ExternalDataSourceSyncSchema[]): boolean | 'indeterminate' {
     const enabledCount = tables.filter((table) => table.should_sync).length
 
@@ -70,12 +76,10 @@ function getSchemaSelectionState(tables: ExternalDataSourceSyncSchema[]): boolea
 
 export default function SchemaForm(): JSX.Element {
     const containerRef = useFloatingContainer()
-    const { toggleSchemaShouldSync, openSyncMethodModal, setDatabaseSchemas, toggleAllTables } =
-        useActions(sourceWizardLogic)
-    const { databaseSchema, tablesAllToggledOn, suggestedTablesMap, isDirectQueryMode, source } =
-        useValues(sourceWizardLogic)
+    const { toggleSchemaShouldSync, openSyncMethodModal, setDatabaseSchemas } = useActions(sourceWizardLogic)
+    const { databaseSchema, suggestedTablesMap, isDirectQueryMode, source } = useValues(sourceWizardLogic)
     const groupedDatabaseSchema = groupDirectQueryTablesBySchema(databaseSchema, source.payload.schema)
-    const groupedSchemaKeys = groupedDatabaseSchema.map((group) => group.schemaName)
+    const groupedSchemaKeys = getDefaultExpandedDirectQuerySchemaKeys(groupedDatabaseSchema)
     const groupedSchemaKeysFingerprint = groupedSchemaKeys.join('|')
     const [expandedSchemaKeys, setExpandedSchemaKeys] = useState<string[]>([])
 
@@ -99,23 +103,7 @@ export default function SchemaForm(): JSX.Element {
             return
         }
 
-        setExpandedSchemaKeys((currentKeys) => {
-            const nextKeys = currentKeys.filter((key) => groupedSchemaKeys.includes(key))
-
-            if (
-                nextKeys.length > 0 &&
-                nextKeys.length === currentKeys.length &&
-                nextKeys.every((key, index) => key === currentKeys[index])
-            ) {
-                return currentKeys
-            }
-
-            if (nextKeys.length > 0) {
-                return nextKeys
-            }
-
-            return groupedSchemaKeys
-        })
+        setExpandedSchemaKeys(groupedSchemaKeys)
     }, [groupedSchemaKeysFingerprint, isDirectQueryMode])
 
     const toggleSchemaGroup = (schemaName: string, shouldSync: boolean): void => {

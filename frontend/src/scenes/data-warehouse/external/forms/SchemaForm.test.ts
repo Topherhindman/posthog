@@ -1,6 +1,7 @@
 import type { ExternalDataSourceSyncSchema } from '~/types'
 
 import {
+    getDefaultExpandedDirectQuerySchemaKeys,
     getDirectQuerySelectionDescription,
     groupDirectQueryTablesBySchema,
     splitDirectQueryTableName,
@@ -64,5 +65,17 @@ describe('SchemaForm', () => {
                 tables: [makeSchema('public.events')],
             },
         ])
+    })
+
+    it('expands all direct query schema groups by default', () => {
+        expect(
+            getDefaultExpandedDirectQuerySchemaKeys(
+                groupDirectQueryTablesBySchema([
+                    makeSchema('analytics.pageviews'),
+                    makeSchema('public.events'),
+                    makeSchema('analytics.sessions'),
+                ])
+            )
+        ).toEqual(['analytics', 'public'])
     })
 })

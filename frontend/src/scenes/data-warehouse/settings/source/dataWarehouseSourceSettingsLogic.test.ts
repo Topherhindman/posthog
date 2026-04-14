@@ -126,4 +126,15 @@ describe('dataWarehouseSourceSettingsLogic', () => {
         expect(dataWarehouseSourceSettingsLogic({ id: 'source-1', tabId: 'tab-b' }).key).toEqual('source-1-tab-b')
         expect(dataWarehouseSourceSettingsLogic({ id: 'source-1' }).key).toEqual('source-1')
     })
+
+    it('does not load jobs until the syncs tab requests them', async () => {
+        const loadJobsSpy = jest.spyOn(api.externalDataSources, 'jobs')
+
+        logic = dataWarehouseSourceSettingsLogic({ id: 'source-1' })
+        logic.mount()
+
+        await expectLogic(logic).toFinishAllListeners()
+
+        expect(loadJobsSpy).not.toHaveBeenCalled()
+    })
 })
