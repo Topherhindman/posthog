@@ -506,7 +506,7 @@ class ExternalDataSourceSerializers(UserAccessControlSerializerMixin, serializer
         if prefetched_schemas is not None:
             schemas = [schema for schema in prefetched_schemas if not schema.deleted]
         else:
-            schemas = instance.schemas.exclude(deleted=True).order_by("name")
+            schemas = list(instance.schemas.exclude(deleted=True).order_by("name"))
         return ExternalDataSchemaSerializer(schemas, many=True, read_only=True, context=self.context).data
 
     def update(self, instance: ExternalDataSource, validated_data: Any) -> Any:
