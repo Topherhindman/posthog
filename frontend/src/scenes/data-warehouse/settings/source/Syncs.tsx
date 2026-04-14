@@ -12,7 +12,10 @@ import { userLogic } from 'scenes/userLogic'
 
 import { ExternalDataJob, ExternalDataJobStatus, LogEntryLevel } from '~/types'
 
-import { dataWarehouseSourceSettingsLogic } from './dataWarehouseSourceSettingsLogic'
+import {
+    DataWarehouseSourceSettingsLogicProps,
+    dataWarehouseSourceSettingsLogic,
+} from './dataWarehouseSourceSettingsLogic'
 
 const StatusTagSetting: Record<ExternalDataJob['status'], LemonTagType> = {
     Running: 'primary',
@@ -24,19 +27,19 @@ const StatusTagSetting: Record<ExternalDataJob['status'], LemonTagType> = {
 
 interface SyncsProps {
     id: string
+    tabId?: string
+    availableSources?: DataWarehouseSourceSettingsLogicProps['availableSources']
 }
 
 const LOG_LEVELS: LogEntryLevel[] = ['LOG', 'INFO', 'WARN', 'WARNING', 'ERROR']
 
-export const Syncs = ({ id }: SyncsProps): JSX.Element => {
+export const Syncs = ({ id, tabId, availableSources }: SyncsProps): JSX.Element => {
+    const logicProps: DataWarehouseSourceSettingsLogicProps = { id, tabId, availableSources }
+    const logic = dataWarehouseSourceSettingsLogic(logicProps)
     const { timezone } = useValues(teamLogic)
     const { user } = useValues(userLogic)
-    const { source, jobs, jobsLoading, canLoadMoreJobs, selectedSchemas } = useValues(
-        dataWarehouseSourceSettingsLogic({ id, availableSources: {} })
-    )
-    const { loadMoreJobs, setSelectedSchemas } = useActions(
-        dataWarehouseSourceSettingsLogic({ id, availableSources: {} })
-    )
+    const { source, jobs, jobsLoading, canLoadMoreJobs, selectedSchemas } = useValues(logic)
+    const { loadMoreJobs, setSelectedSchemas } = useActions(logic)
     const showDebugLogs = user?.is_staff || user?.is_impersonated
 
     const schemaOptions = [...(source?.schemas ?? [])]

@@ -1,4 +1,16 @@
-import { actions, kea, key, path, props, reducers, selectors, useActions, useValues } from 'kea'
+import {
+    actions,
+    BuiltLogic,
+    kea,
+    key,
+    LogicWrapper,
+    path,
+    props,
+    reducers,
+    selectors,
+    useActions,
+    useValues,
+} from 'kea'
 import { actionToUrl, urlToAction } from 'kea-router'
 import { useEffect } from 'react'
 
@@ -6,7 +18,9 @@ import { NotFound } from 'lib/components/NotFound'
 import { FEATURE_FLAGS } from 'lib/constants'
 import { LemonTab, LemonTabs } from 'lib/lemon-ui/LemonTabs'
 import { featureFlagLogic } from 'lib/logic/featureFlagLogic'
+import { useAttachedLogic } from 'lib/logic/scenes/useAttachedLogic'
 import { DataPipelinesSelfManagedSource } from 'scenes/data-pipelines/DataPipelinesSelfManagedSource'
+import { availableSourcesDataLogic } from 'scenes/data-warehouse/new/availableSourcesDataLogic'
 import { cleanSourceId, isSelfManagedSourceId } from 'scenes/data-warehouse/utils'
 import { Scene, SceneExport } from 'scenes/sceneTypes'
 import { urls } from 'scenes/urls'
@@ -29,6 +43,7 @@ export type DataWarehouseSourceSceneTab = (typeof DATA_WAREHOUSE_SOURCE_SCENE_TA
 
 export interface DataWarehouseSourceSceneProps {
     id: string
+    tabId?: string
 }
 
 export function getDefaultDataWarehouseSourceSceneTab(id?: string): DataWarehouseSourceSceneTab {
@@ -41,7 +56,7 @@ export function isManagedSourceSceneId(id: string): boolean {
 
 export const dataWarehouseSourceSceneLogic = kea<dataWarehouseSourceSceneLogicType>([
     props({} as DataWarehouseSourceSceneProps),
-    key(({ id }: DataWarehouseSourceSceneProps) => id),
+    key(({ id, tabId }: DataWarehouseSourceSceneProps) => (tabId ? `${id}-${tabId}` : id)),
     path((key) => ['scenes', 'data-warehouse', 'dataWarehouseSourceSceneLogic', key]),
     actions({
         setCurrentTab: (tab: DataWarehouseSourceSceneTab) => ({ tab }),
@@ -135,10 +150,10 @@ export const scene: SceneExport<(typeof dataWarehouseSourceSceneLogic)['props']>
     paramsToProps: ({ params: { id } }) => ({ id }),
 }
 
-export function DataWarehouseSourceScene(): JSX.Element {
-    const { currentTab, logicProps, breadcrumbName } = useValues(dataWarehouseSourceSceneLogic)
-    const { setCurrentTab } = useActions(dataWarehouseSourceSceneLogic)
-    const { id } = logicProps
+export function DataWarehouseSourceScene({ id, tabId }: DataWarehouseSourceSceneProps): JSX.Element {
+    const logic = dataWarehouseSourceSceneLogic({ id, tabId })
+    const { currentTab, breadcrumbName } = useValues(logic)
+    const { setCurrentTab } = useActions(logic)
 
     if (!id) {
         return <NotFound object="Data warehouse source" />
@@ -155,7 +170,13 @@ export function DataWarehouseSourceScene(): JSX.Element {
                 isLoading={breadcrumbName === 'Source'}
             />
             {isManagedSourceSceneId(id) ? (
-                <ManagedSourceTabs sourceId={sourceId} currentTab={currentTab} setCurrentTab={setCurrentTab} />
+                <ManagedSourceTabs
+                    sourceId={sourceId}
+                    currentTab={currentTab}
+                    setCurrentTab={setCurrentTab}
+                    tabId={tabId}
+                    attachTo={logic}
+                />
             ) : (
                 <LemonTabs
                     activeKey={isSelfManagedSource ? 'configuration' : currentTab}
@@ -178,14 +199,22 @@ function ManagedSourceTabs({
     sourceId,
     currentTab,
     setCurrentTab,
+    tabId,
+    attachTo,
 }: {
     sourceId: string
     currentTab: DataWarehouseSourceSceneTab
     setCurrentTab: (tab: DataWarehouseSourceSceneTab) => void
+    tabId?: string
+    attachTo: BuiltLogic | LogicWrapper
 }): JSX.Element {
-    const sourceSettingsLogic = dataWarehouseSourceSettingsLogic({ id: sourceId, availableSources: {} })
+    const { availableSources } = useValues(availableSourcesDataLogic)
+    const sourceSettingsLogicProps = { id: sourceId, tabId, availableSources: availableSources ?? {} }
+    const sourceSettingsLogic = dataWarehouseSourceSettingsLogic(sourceSettingsLogicProps)
     const { featureFlags } = useValues(featureFlagLogic)
     const { source } = useValues(sourceSettingsLogic)
+
+    useAttachedLogic(sourceSettingsLogic, attachTo)
 
     const isDirectQuerySource =
         !!featureFlags[FEATURE_FLAGS.DWH_POSTGRES_DIRECT_QUERY] && source?.access_method === 'direct'
@@ -204,12 +233,12 @@ function ManagedSourceTabs({
         {
             label: 'Schemas',
             key: 'schemas',
-            content: <Schemas id={sourceId} />,
+            content: <Schemas id={sourceId} tabId={tabId} availableSources={availableSources ?? {}} />,
         },
         {
             label: 'Configuration',
             key: 'configuration',
-            content: <SourceConfiguration id={sourceId} />,
+            content: <SourceConfiguration id={sourceId} tabId={tabId} availableSources={availableSources ?? {}} />,
         },
     ]
 
@@ -217,7 +246,7 @@ function ManagedSourceTabs({
         tabs.splice(1, 0, {
             label: 'Syncs',
             key: 'syncs',
-            content: <Syncs id={sourceId} />,
+            content: <Syncs id={sourceId} tabId={tabId} availableSources={availableSources ?? {}} />,
         })
     }
 
@@ -225,7 +254,7 @@ function ManagedSourceTabs({
         tabs.push({
             label: 'Webhook',
             key: 'webhook',
-            content: <WebhookTab id={sourceId} />,
+            content: <WebhookTab id={sourceId} tabId={tabId} />,
         })
     }
 

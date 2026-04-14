@@ -1,4 +1,4 @@
-import { BindLogic, useActions, useValues } from 'kea'
+import { useActions, useValues } from 'kea'
 import { router } from 'kea-router'
 import React, { useCallback, useEffect, useState } from 'react'
 
@@ -53,7 +53,10 @@ import {
 import { SyncMethodForm } from '../../external/forms/SyncMethodForm'
 import { dataWarehouseSettingsLogic } from '../dataWarehouseSettingsLogic'
 import { dataWarehouseSourcesTableSyncMethodModalLogic } from '../dataWarehouseSourcesTableSyncMethodModalLogic'
-import { dataWarehouseSourceSettingsLogic } from './dataWarehouseSourceSettingsLogic'
+import {
+    DataWarehouseSourceSettingsLogicProps,
+    dataWarehouseSourceSettingsLogic,
+} from './dataWarehouseSourceSettingsLogic'
 
 /**
  * Wrapper component for AccessControlAction with common external data source editor props.
@@ -79,6 +82,8 @@ const SourceEditorAction = ({
 
 export interface SchemasProps {
     id: string
+    tabId?: string
+    availableSources?: DataWarehouseSourceSettingsLogicProps['availableSources']
 }
 
 export function splitDirectQuerySchemaName(name: string): { schemaName: string; tableName: string } {
@@ -122,8 +127,8 @@ function getSchemaSelectionState(schemas: ExternalDataSourceSchema[]): boolean |
 }
 
 const REVENUE_ENABLED_SOURCES: ExternalDataSourceType[] = ['Stripe']
-export const Schemas = ({ id }: SchemasProps): JSX.Element => {
-    const logicProps = { id, availableSources: {} }
+export const Schemas = ({ id, tabId, availableSources }: SchemasProps): JSX.Element => {
+    const logicProps: DataWarehouseSourceSettingsLogicProps = { id, tabId, availableSources }
     const logic = dataWarehouseSourceSettingsLogic(logicProps)
     const {
         source,
@@ -143,7 +148,7 @@ export const Schemas = ({ id }: SchemasProps): JSX.Element => {
     const groupedDirectQuerySchemas = groupDirectQuerySourceSchemasBySchema(filteredSchemas)
 
     return (
-        <BindLogic logic={dataWarehouseSourceSettingsLogic} props={logicProps}>
+        <>
             <div className="flex items-center justify-between gap-2 mb-2">
                 <div className="flex items-center gap-3">
                     <LemonSwitch
@@ -247,7 +252,7 @@ export const Schemas = ({ id }: SchemasProps): JSX.Element => {
                         </LemonButton>
                     </div>
                 )}
-        </BindLogic>
+        </>
     )
 }
 

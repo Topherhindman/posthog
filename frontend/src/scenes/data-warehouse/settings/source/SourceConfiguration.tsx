@@ -1,4 +1,4 @@
-import { BindLogic, useActions, useValues } from 'kea'
+import { useActions, useValues } from 'kea'
 import { Form } from 'kea-forms'
 import { useEffect, useState } from 'react'
 
@@ -11,29 +11,36 @@ import { buildKeaFormDefaultFromSourceDetails } from 'scenes/data-warehouse/new/
 
 import { AccessControlLevel, AccessControlResourceType } from '~/types'
 
-import { dataWarehouseSourceSettingsLogic } from './dataWarehouseSourceSettingsLogic'
+import {
+    DataWarehouseSourceSettingsLogicProps,
+    dataWarehouseSourceSettingsLogic,
+} from './dataWarehouseSourceSettingsLogic'
 
 interface SourceConfigurationProps {
     id: string
+    tabId?: string
+    availableSources?: DataWarehouseSourceSettingsLogicProps['availableSources']
 }
 
-export const SourceConfiguration = ({ id }: SourceConfigurationProps): JSX.Element => {
-    const { availableSources, availableSourcesLoading } = useValues(availableSourcesDataLogic)
+export const SourceConfiguration = ({ id, tabId, availableSources }: SourceConfigurationProps): JSX.Element => {
+    const logicProps: DataWarehouseSourceSettingsLogicProps = { id, tabId, availableSources }
+    const { availableSourcesLoading } = useValues(availableSourcesDataLogic)
 
-    if (availableSourcesLoading || availableSources === null) {
+    if (availableSourcesLoading) {
         return <LemonSkeleton />
     }
 
-    return (
-        <BindLogic logic={dataWarehouseSourceSettingsLogic} props={{ id, availableSources }}>
-            <UpdateSourceConnectionFormContainer />
-        </BindLogic>
-    )
+    return <UpdateSourceConnectionFormContainer logicProps={logicProps} />
 }
 
-function UpdateSourceConnectionFormContainer(): JSX.Element {
-    const { sourceFieldConfig, source, sourceConfigLoading } = useValues(dataWarehouseSourceSettingsLogic)
-    const { setSourceConfigValue } = useActions(dataWarehouseSourceSettingsLogic)
+function UpdateSourceConnectionFormContainer({
+    logicProps,
+}: {
+    logicProps: DataWarehouseSourceSettingsLogicProps
+}): JSX.Element {
+    const logic = dataWarehouseSourceSettingsLogic(logicProps)
+    const { sourceFieldConfig, source, sourceConfigLoading } = useValues(logic)
+    const { setSourceConfigValue } = useActions(logic)
 
     const [jobInputs, setJobInputs] = useState<Record<string, any>>({})
 
@@ -69,7 +76,7 @@ function UpdateSourceConnectionFormContainer(): JSX.Element {
     return (
         <>
             <span className="block mb-2">Overwrite your existing configuration here</span>
-            <Form logic={dataWarehouseSourceSettingsLogic} formKey="sourceConfig" enableFormOnSubmit>
+            <Form logic={logic} formKey="sourceConfig" enableFormOnSubmit>
                 <SourceFormComponent
                     showPrefix={false}
                     showDescription={true}

@@ -2,7 +2,7 @@ import { actions, connect, events, kea, listeners, path, reducers, selectors } f
 import { loaders } from 'kea-loaders'
 import { subscriptions } from 'kea-subscriptions'
 
-import { IconBolt, IconDatabase, IconDocument, IconEndpoints, IconPlug, IconPlus } from '@posthog/icons'
+import { IconBolt, IconDatabase, IconDocument, IconEndpoints, IconFolder, IconPlug, IconPlus } from '@posthog/icons'
 import { LemonMenuItem } from '@posthog/lemon-ui'
 import { Spinner } from '@posthog/lemon-ui'
 
@@ -37,10 +37,10 @@ import {
 } from '~/types'
 
 import { dataWarehouseJoinsLogic } from '../../external/dataWarehouseJoinsLogic'
+import { externalDataSourcesLogic } from '../../externalDataSourcesLogic'
 import { dataWarehouseViewsLogic } from '../../saved_queries/dataWarehouseViewsLogic'
 import { viewLinkLogic } from '../../viewLinkLogic'
 import { draftsLogic } from '../draftsLogic'
-import { sqlEditorLogic } from '../sqlEditorLogic'
 import type { queryDatabaseLogicType } from './queryDatabaseLogicType'
 
 export type EditorSidebarTreeRef = React.RefObject<LemonTreeRef> | null
@@ -1122,6 +1122,14 @@ const getDirectConnectionSchemaName = (tableNode: TreeDataItem, defaultSchemaNam
     return null
 }
 
+const getDirectConnectionDisplayTableName = (tableNode: TreeDataItem): string => {
+    const tableName =
+        tableNode.record?.type === 'table' ? (tableNode.record.table?.name ?? tableNode.name) : tableNode.name
+    const dotIndex = tableName.indexOf('.')
+
+    return dotIndex > 0 ? tableName.slice(dotIndex + 1) : tableName
+}
+
 export const groupDirectConnectionTableNodesBySchema = (
     tableNodes: TreeDataItem[],
     isSearch: boolean,
@@ -1139,7 +1147,10 @@ export const groupDirectConnectionTableNodesBySchema = (
         }
 
         const currentNodes = tablesBySchema.get(schemaName) ?? []
-        currentNodes.push(tableNode)
+        currentNodes.push({
+            ...tableNode,
+            displayName: getDirectConnectionDisplayTableName(tableNode),
+        })
         tablesBySchema.set(schemaName, currentNodes)
     })
 
@@ -1149,6 +1160,7 @@ export const groupDirectConnectionTableNodesBySchema = (
             id: `${isSearch ? 'search-' : ''}schema-${schemaName}`,
             name: schemaName,
             type: 'node' as const,
+            icon: <IconFolder />,
             record: {
                 type: 'source-folder',
                 sourceType: schemaName,
@@ -1161,6 +1173,7 @@ export const groupDirectConnectionTableNodesBySchema = (
             id: `${isSearch ? 'search-' : ''}schema-ungrouped`,
             name: defaultSchemaName?.trim() || 'Tables',
             type: 'node',
+            icon: <IconFolder />,
             record: {
                 type: 'source-folder',
                 sourceType: defaultSchemaName?.trim() || 'Tables',
@@ -1172,6 +1185,14 @@ export const groupDirectConnectionTableNodesBySchema = (
     }
 
     return schemaFolders
+}
+
+export const getDefaultExpandedRootIds = (connectionId: string | null, displayedTreeData: TreeDataItem[]): string[] => {
+    if (!shouldUseDirectConnectionTree(connectionId)) {
+        return []
+    }
+
+    return displayedTreeData.filter((item) => item.record?.type !== 'source-folder').map((item) => item.id)
 }
 
 const findTreePath = (items: TreeDataItem[], targetId: string, path: TreeDataItem[] = []): TreeDataItem[] | null => {
@@ -1281,8 +1302,8 @@ export const queryDatabaseLogic = kea<queryDatabaseLogicType>([
             ],
             draftsLogic,
             ['drafts', 'draftsResponseLoading', 'hasMoreDrafts'],
-            sqlEditorLogic,
-            ['selectedDirectSource'],
+            externalDataSourcesLogic,
+            ['dataWarehouseSources'],
             featureFlagLogic,
             ['featureFlags'],
             userLogic,
@@ -1611,6 +1632,12 @@ export const queryDatabaseLogic = kea<queryDatabaseLogicType>([
                         .map((result) => [result.item, result.matches as FuseSearchMatch[]])
                 }
                 return latestEndpointTables.map((table) => [table, null])
+            },
+        ],
+        selectedDirectSource: [
+            (s) => [s.dataWarehouseSources, s.connectionId],
+            (dataWarehouseSources, connectionId): { job_inputs?: Record<string, any> } | undefined => {
+                return dataWarehouseSources?.results.find((source) => source.id === connectionId)
             },
         ],
         searchTreeSourceContext: [
@@ -2217,13 +2244,8 @@ export const queryDatabaseLogic = kea<queryDatabaseLogicType>([
         ],
         defaultExpandedRootIds: [
             (s) => [s.connectionId, s.displayedTreeData],
-            (connectionId: string | null, displayedTreeData: TreeDataItem[]): string[] => {
-                if (!shouldUseDirectConnectionTree(connectionId)) {
-                    return []
-                }
-
-                return displayedTreeData.map((item) => item.id)
-            },
+            (connectionId: string | null, displayedTreeData: TreeDataItem[]): string[] =>
+                getDefaultExpandedRootIds(connectionId, displayedTreeData),
         ],
         expandedItemIds: [
             (s) => [s.activeExpandedFolderIds, s.defaultExpandedRootIds],

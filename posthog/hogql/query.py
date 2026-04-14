@@ -195,6 +195,33 @@ class LenientDirectPostgresDateLoader(DateLoader):
                 raise exc from None
 
 
+def get_runtime_direct_postgres_connection_metadata(
+    connection: psycopg.Connection,
+    connection_metadata: dict[str, object] | None = None,
+) -> dict[str, object] | None:
+    runtime_connection_metadata = dict(connection_metadata) if isinstance(connection_metadata, dict) else {}
+    engine = runtime_connection_metadata.get("engine")
+    database = runtime_connection_metadata.get("database")
+
+    if engine is not None and isinstance(database, str) and database.strip():
+        return runtime_connection_metadata
+
+    metadata_cursor = connection.execute("SELECT current_database(), version()")
+    row = metadata_cursor.fetchone()
+    current_database = str(row[0]).strip() if row and row[0] is not None else None
+    version = str(row[1]) if row and len(row) > 1 and row[1] is not None else ""
+
+    if current_database and "database" not in runtime_connection_metadata:
+        runtime_connection_metadata["database"] = current_database
+
+    if "engine" not in runtime_connection_metadata:
+        runtime_connection_metadata["engine"] = (
+            "duckdb" if "duckdb" in version.lower() or "duckgres" in version.lower() else "postgres"
+        )
+
+    return runtime_connection_metadata or None
+
+
 @dataclasses.dataclass
 class HogQLQueryExecutor:
     query: Union[str, ast.SelectQuery, ast.SelectSetQuery]
@@ -548,9 +575,13 @@ class HogQLQueryExecutor:
                         connection_kwargs["sslmode"] = "require"
 
                     with psycopg.connect(**connection_kwargs) as connection:
+                        runtime_connection_metadata = get_runtime_direct_postgres_connection_metadata(
+                            connection,
+                            source.connection_metadata,
+                        )
                         session_setup_sql = direct_postgres_session_setup_sql(
                             source_schema,
-                            source.connection_metadata,
+                            runtime_connection_metadata,
                             host,
                         )
                         if session_setup_sql:

@@ -16,6 +16,7 @@ from posthog.hogql.query import (
     HogQLQueryExecutor,
     LenientDirectPostgresDateLoader,
     direct_postgres_session_setup_sql,
+    get_runtime_direct_postgres_connection_metadata,
     parse_lenient_direct_postgres_date,
     postgres_error_to_message,
     postgres_oid_to_clickhouse_type,
@@ -86,6 +87,18 @@ class TestDirectPostgresQuery(APIBaseTest):
             direct_postgres_session_setup_sql("posthog", host="db.eu.postwh.com"),
             "USE posthog",
         )
+
+    def test_runtime_direct_postgres_connection_metadata_hydrates_missing_duckdb_catalog(self):
+        connection = MagicMock()
+        metadata_cursor = MagicMock()
+        metadata_cursor.fetchone.return_value = ("ducklake", "DuckDB v1.3.2")
+        connection.execute.return_value = metadata_cursor
+
+        self.assertEqual(
+            get_runtime_direct_postgres_connection_metadata(connection, {"engine": "duckdb"}),
+            {"engine": "duckdb", "database": "ducklake"},
+        )
+        connection.execute.assert_called_once_with("SELECT current_database(), version()")
 
     def test_generate_sql_for_direct_postgres_table_does_not_require_team_id_field(self):
         source = ExternalDataSource.objects.create(
@@ -672,7 +685,7 @@ class TestDirectPostgresQuery(APIBaseTest):
                 "password": "postgres",
                 "schema": "ph3",
             },
-            connection_metadata={"engine": "duckdb"},
+            connection_metadata={"engine": "duckdb", "database": "posthog"},
         )
 
         mocked_cursor = MagicMock()
@@ -695,9 +708,60 @@ class TestDirectPostgresQuery(APIBaseTest):
 
         self.assertEqual(response.results, [(date(2026, 3, 26),)])
         mocked_connection.execute.assert_called_once_with(
-            f"USE {escape_postgres_identifier(source.job_inputs['schema'])}"
+            f"USE {escape_postgres_identifier(source.connection_metadata['database'])}.{escape_postgres_identifier(source.job_inputs['schema'])}"
         )
         mocked_connection.adapters.register_loader.assert_any_call("date", LenientDirectPostgresDateLoader)
+
+    @patch("posthog.hogql.query.psycopg.connect")
+    def test_send_raw_query_hydrates_missing_duckdb_catalog_before_session_setup(self, mock_connect):
+        source = ExternalDataSource.objects.create(
+            team=self.team,
+            source_id="source_id",
+            connection_id="connection_id",
+            status=ExternalDataSource.Status.COMPLETED,
+            source_type="Postgres",
+            access_method=ExternalDataSource.AccessMethod.DIRECT,
+            prefix="ph3",
+            job_inputs={
+                "host": "localhost",
+                "port": 5432,
+                "database": "postgres",
+                "user": "postgres",
+                "password": "postgres",
+                "schema": "system",
+            },
+            connection_metadata={"engine": "duckdb"},
+        )
+
+        metadata_cursor = MagicMock()
+        metadata_cursor.fetchone.return_value = ("ducklake", "DuckDB v1.3.2")
+
+        mocked_cursor = MagicMock()
+        mocked_cursor.fetchall.return_value = [(1,)]
+        column = MagicMock(type_code=23)
+        column.name = "value"
+        mocked_cursor.description = [column]
+
+        mocked_connection = MagicMock()
+        mocked_connection.execute.side_effect = [metadata_cursor, None]
+        mocked_connection.cursor.return_value.__enter__.return_value = mocked_cursor
+        mock_connect.return_value.__enter__.return_value = mocked_connection
+
+        executor = HogQLQueryExecutor(
+            query="SELECT * FROM system.query_log LIMIT 100",
+            team=self.team,
+            connection_id=str(source.id),
+            send_raw_query=True,
+        )
+
+        response = executor.execute()
+
+        self.assertEqual(response.results, [(1,)])
+        mocked_connection.execute.assert_any_call("SELECT current_database(), version()")
+        mocked_connection.execute.assert_any_call(
+            f"USE {escape_postgres_identifier('ducklake')}.{escape_postgres_identifier(source.job_inputs['schema'])}"
+        )
+        mocked_cursor.execute.assert_called_once_with("SELECT * FROM system.query_log LIMIT 100", None)
 
     @patch("posthog.hogql.query.psycopg.connect")
     def test_send_raw_query_uses_catalog_and_schema_for_duckdb_when_available(self, mock_connect):

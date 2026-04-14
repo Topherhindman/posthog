@@ -15,6 +15,7 @@ import type { webhookTabLogicType } from './webhookTabLogicType'
 
 export interface WebhookTabLogicProps {
     id: string
+    tabId?: string
 }
 
 export const webhookTabLogic = kea<webhookTabLogicType>([
@@ -68,17 +69,16 @@ export const webhookTabLogic = kea<webhookTabLogicType>([
         source: [
             () => [
                 (state: any, props: WebhookTabLogicProps) =>
-                    dataWarehouseSourceSettingsLogic({ id: props.id, availableSources: {} }).selectors.source(state),
+                    dataWarehouseSourceSettingsLogic({ id: props.id, tabId: props.tabId }).selectors.source(state),
             ],
             (source: ExternalDataSource | null): ExternalDataSource | null => source,
         ],
         sourceConfig: [
             () => [
                 (state: any, props: WebhookTabLogicProps) =>
-                    dataWarehouseSourceSettingsLogic({
-                        id: props.id,
-                        availableSources: {},
-                    }).selectors.sourceFieldConfig(state),
+                    dataWarehouseSourceSettingsLogic({ id: props.id, tabId: props.tabId }).selectors.sourceFieldConfig(
+                        state
+                    ),
             ],
             (sourceFieldConfig: SourceConfig | null): SourceConfig | null => sourceFieldConfig,
         ],

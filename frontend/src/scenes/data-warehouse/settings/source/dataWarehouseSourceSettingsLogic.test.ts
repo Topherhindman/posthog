@@ -58,7 +58,7 @@ describe('dataWarehouseSourceSettingsLogic', () => {
             .spyOn(api.externalDataSources, 'bulkUpdateSchemas')
             .mockImplementation(async (_id, schemas) => schemas as ExternalDataSourceSchema[])
 
-        logic = dataWarehouseSourceSettingsLogic({ id: 'source-1', availableSources: {} })
+        logic = dataWarehouseSourceSettingsLogic({ id: 'source-1' })
         logic.mount()
 
         await expectLogic(logic).toFinishAllListeners()
@@ -92,7 +92,7 @@ describe('dataWarehouseSourceSettingsLogic', () => {
                 })
         )
 
-        logic = dataWarehouseSourceSettingsLogic({ id: 'source-1', availableSources: {} })
+        logic = dataWarehouseSourceSettingsLogic({ id: 'source-1' })
         logic.mount()
 
         await expectLogic(logic).toFinishAllListeners()
@@ -119,5 +119,11 @@ describe('dataWarehouseSourceSettingsLogic', () => {
             expect.objectContaining({ id: 'schema-1', should_sync: false }),
         ])
         expect(logic.values.source?.schemas[0].should_sync).toBe(false)
+    })
+
+    it('uses separate logic instances per browser tab', () => {
+        expect(dataWarehouseSourceSettingsLogic({ id: 'source-1', tabId: 'tab-a' }).key).toEqual('source-1-tab-a')
+        expect(dataWarehouseSourceSettingsLogic({ id: 'source-1', tabId: 'tab-b' }).key).toEqual('source-1-tab-b')
+        expect(dataWarehouseSourceSettingsLogic({ id: 'source-1' }).key).toEqual('source-1')
     })
 })

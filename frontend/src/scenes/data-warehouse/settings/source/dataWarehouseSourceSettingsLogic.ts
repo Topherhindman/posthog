@@ -31,7 +31,8 @@ import type { dataWarehouseSourceSettingsLogicType } from './dataWarehouseSource
 
 export interface DataWarehouseSourceSettingsLogicProps {
     id: string
-    availableSources: Record<string, SourceConfig>
+    tabId?: string
+    availableSources?: Record<string, SourceConfig>
 }
 
 const REFRESH_INTERVAL = 5000
@@ -194,7 +195,7 @@ const removeEmptySensitiveValues = (fields: SourceFieldConfig[], valueObj: Recor
 export const dataWarehouseSourceSettingsLogic = kea<dataWarehouseSourceSettingsLogicType>([
     path(['scenes', 'data-warehouse', 'settings', 'source', 'dataWarehouseSourceSettingsLogic']),
     props({} as DataWarehouseSourceSettingsLogicProps),
-    key(({ id }) => id),
+    key(({ id, tabId }) => (tabId ? `${id}-${tabId}` : id)),
     connect(() => ({
         values: [availableSourcesDataLogic, ['availableSources']],
         actions: [externalDataSourcesLogic, ['updateSource']],
@@ -374,7 +375,7 @@ export const dataWarehouseSourceSettingsLogic = kea<dataWarehouseSourceSettingsL
     }),
     forms(({ values, actions, props }) => ({
         sourceConfig: {
-            defaults: buildKeaFormDefaultFromSourceDetails(props.availableSources),
+            defaults: buildKeaFormDefaultFromSourceDetails(props.availableSources ?? {}),
             errors: (sourceValues) => {
                 return getErrorsForFields(values.sourceFieldConfig?.fields ?? [], sourceValues as any, {
                     allowBlankSensitiveFields: true,
@@ -552,6 +553,8 @@ export const dataWarehouseSourceSettingsLogic = kea<dataWarehouseSourceSettingsL
                 }, 'sourceRefreshTimeout')
 
                 const mountedSceneLogic =
+                    dataWarehouseSourceSceneLogic.findMounted({ id: props.id, tabId: props.tabId }) ??
+                    dataWarehouseSourceSceneLogic.findMounted({ id: `managed-${props.id}`, tabId: props.tabId }) ??
                     dataWarehouseSourceSceneLogic.findMounted({ id: props.id }) ??
                     dataWarehouseSourceSceneLogic.findMounted({ id: `managed-${props.id}` })
 
