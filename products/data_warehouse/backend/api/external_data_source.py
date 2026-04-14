@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uuid
 import dataclasses
-from typing import Any
+from typing import Any, cast
 
 from django.db import transaction
 from django.db.models import Prefetch, Q
@@ -624,20 +624,21 @@ class ExternalDataSourceSerializers(UserAccessControlSerializerMixin, serializer
                     team_id=instance.team_id,
                 )
 
-            updated_source._prefetched_objects_cache = {
-                "schemas": list(
-                    ExternalDataSchema.objects.filter(team_id=instance.team_id, source_id=updated_source.id)
-                    .exclude(deleted=True)
-                    .select_related("table__credential", "table__external_data_source")
-                    .order_by("name")
-                )
-            }
-            updated_source.active_schemas = list(
+            schemas = list(
+                ExternalDataSchema.objects.filter(team_id=instance.team_id, source_id=updated_source.id)
+                .exclude(deleted=True)
+                .select_related("table__credential", "table__external_data_source")
+                .order_by("name")
+            )
+            active_schemas = list(
                 ExternalDataSchema.objects.filter(team_id=instance.team_id, source_id=updated_source.id)
                 .exclude(deleted=True)
                 .filter(Q(should_sync=True) | Q(latest_error__isnull=False))
                 .select_related("source", "table__credential", "table__external_data_source")
             )
+            updated_source_any = cast(Any, updated_source)
+            updated_source_any._prefetched_objects_cache = {"schemas": schemas}
+            updated_source_any.active_schemas = active_schemas
 
         return updated_source
 
