@@ -148,7 +148,7 @@ tools:
     logs-alerts-simulate-create:
         operation: logs_alerts_simulate_create
         enabled: false
-    logs-explainLogWithAI-create:
+    logs-explain-log-with-ai-create:
         operation: logs_explainLogWithAI_create
         enabled: false
     logs-alerts-update:
