@@ -5,25 +5,13 @@ import { IconInfo, IconWarning } from '@posthog/icons'
 import { LemonButton, LemonCheckbox, LemonCollapse, LemonModal, LemonTable, LemonTag, Tooltip } from '@posthog/lemon-ui'
 
 import { useFloatingContainer } from 'lib/hooks/useFloatingContainerContext'
-import { groupBy } from 'lib/utils'
+import { groupBy, pluralize } from 'lib/utils'
 import { SyncTypeLabelMap } from 'scenes/data-warehouse/utils'
 
 import { ExternalDataSourceSyncSchema } from '~/types'
 
 import { sourceWizardLogic } from '../../new/sourceWizardLogic'
 import { SyncMethodForm } from './SyncMethodForm'
-
-export function getDirectQuerySelectionDescription(schema: unknown): string {
-    const normalizedSchema = typeof schema === 'string' ? schema.trim() : ''
-    const baseDescription =
-        "Query selected Postgres tables from within PostHog. Tables stay in the source database and are not synced into the data warehouse. You can't join data from these tables with other data in the PostHog warehouse."
-
-    if (!normalizedSchema) {
-        return `${baseDescription} Enable each schema to choose which tables should be queryable.`
-    }
-
-    return `${baseDescription} Choose which tables from the "${normalizedSchema}" schema should be queryable.`
-}
 
 export function splitDirectQueryTableName(
     table: string,
@@ -34,7 +22,7 @@ export function splitDirectQueryTableName(
     if (firstDotIndex === -1) {
         const normalizedFallbackSchema = fallbackSchema?.trim()
         return {
-            schemaName: normalizedFallbackSchema || 'Unqualified',
+            schemaName: normalizedFallbackSchema || 'Tables',
             tableName: table,
         }
     }
@@ -54,6 +42,16 @@ export function groupDirectQueryTablesBySchema(
     )
         .sort(([schemaA], [schemaB]) => schemaA.localeCompare(schemaB))
         .map(([schemaName, tables]) => ({ schemaName, tables }))
+}
+
+export function getDirectQuerySelectionDescription(selectedSchema?: string | null): string {
+    const normalizedSchema = selectedSchema?.trim()
+
+    if (normalizedSchema) {
+        return `Query selected Postgres tables from within PostHog. Tables stay in the source database and are not synced into the data warehouse. You can't join data from these tables with other data in the PostHog warehouse. Choose which tables from the "${normalizedSchema}" schema should be queryable.`
+    }
+
+    return "Query selected Postgres tables from within PostHog. Tables stay in the source database and are not synced into the data warehouse. You can't join data from these tables with other data in the PostHog warehouse. Enable each schema to choose which tables should be queryable."
 }
 
 function getSchemaSelectionState(tables: ExternalDataSourceSyncSchema[]): boolean | 'indeterminate' {
@@ -76,7 +74,6 @@ export default function SchemaForm(): JSX.Element {
         useActions(sourceWizardLogic)
     const { databaseSchema, tablesAllToggledOn, suggestedTablesMap, isDirectQueryMode, source } =
         useValues(sourceWizardLogic)
-    const directQuerySelectionDescription = getDirectQuerySelectionDescription(source.payload.schema)
     const groupedDatabaseSchema = groupDirectQueryTablesBySchema(databaseSchema, source.payload.schema)
     const groupedSchemaKeys = groupedDatabaseSchema.map((group) => group.schemaName)
     const groupedSchemaKeysFingerprint = groupedSchemaKeys.join('|')
@@ -148,125 +145,128 @@ export default function SchemaForm(): JSX.Element {
     return (
         <>
             <div className="flex flex-col gap-2">
-                {isDirectQueryMode && <p className="text-sm text-muted-alt mb-0">{directQuerySelectionDescription}</p>}
                 <div className="max-h-[60vh] overflow-y-auto">
                     {isDirectQueryMode ? (
                         groupedDatabaseSchema.length > 0 ? (
-                            <div className="border rounded bg-bg-light">
-                                <div className="grid grid-cols-[auto_minmax(0,1fr)] gap-3 border-b px-4 py-3">
-                                    <LemonCheckbox checked={tablesAllToggledOn} onChange={toggleAllSchemaGroups} />
-                                    <div className="flex items-center justify-between gap-3">
-                                        <span className="text-sm font-semibold">Schemas</span>
-                                        <span className="text-xs text-muted-alt">
-                                            {databaseSchema.filter((schema) => schema.should_sync).length} of{' '}
-                                            {databaseSchema.length} tables enabled
-                                        </span>
-                                    </div>
+                            <>
+                                <div className="flex items-center justify-between gap-2 px-1 pb-2">
+                                    <LemonCheckbox checked={tablesAllToggledOn} onChange={toggleAllSchemaGroups}>
+                                        Select all
+                                    </LemonCheckbox>
+                                    <span className="text-sm text-muted-alt">
+                                        {databaseSchema.filter((schema) => schema.should_sync).length} of{' '}
+                                        {databaseSchema.length} {pluralize(databaseSchema.length, 'table', 'tables')}{' '}
+                                        queryable
+                                    </span>
                                 </div>
-                                <LemonCollapse
-                                    multiple
-                                    embedded
-                                    activeKeys={expandedSchemaKeys}
-                                    onChange={setExpandedSchemaKeys}
-                                    panels={groupedDatabaseSchema.map(({ schemaName, tables }) => {
-                                        const selectedTablesCount = tables.filter((table) => table.should_sync).length
+                                <div className="border rounded bg-bg-light">
+                                    <LemonCollapse
+                                        multiple
+                                        embedded
+                                        activeKeys={expandedSchemaKeys}
+                                        onChange={setExpandedSchemaKeys}
+                                        panels={groupedDatabaseSchema.map(({ schemaName, tables }) => {
+                                            const selectedTablesCount = tables.filter(
+                                                (table) => table.should_sync
+                                            ).length
 
-                                        return {
-                                            key: schemaName,
-                                            header: (
-                                                <div className="flex items-center justify-between gap-3 w-full">
-                                                    <div className="flex items-center gap-2 min-w-0">
-                                                        <LemonCheckbox
-                                                            checked={getSchemaSelectionState(tables)}
-                                                            stopPropagation
-                                                            onChange={(checked) =>
-                                                                toggleSchemaGroup(schemaName, checked)
-                                                            }
-                                                        />
-                                                        <span className="font-semibold truncate">{schemaName}</span>
-                                                    </div>
-                                                    <span className="text-xs text-muted-alt whitespace-nowrap">
-                                                        {selectedTablesCount} of {tables.length} tables enabled
-                                                    </span>
-                                                </div>
-                                            ),
-                                            content: (
-                                                <div className="border-t bg-bg-light">
-                                                    {showRows && (
-                                                        <div className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-3 px-4 py-2 text-xs font-semibold text-muted-alt border-b">
-                                                            <span />
-                                                            <span>Table</span>
-                                                            <span>Rows</span>
+                                            return {
+                                                key: schemaName,
+                                                header: (
+                                                    <div className="flex items-center justify-between gap-3 w-full">
+                                                        <div className="flex items-center gap-2 min-w-0">
+                                                            <LemonCheckbox
+                                                                checked={getSchemaSelectionState(tables)}
+                                                                stopPropagation
+                                                                onChange={(checked) =>
+                                                                    toggleSchemaGroup(schemaName, checked)
+                                                                }
+                                                            />
+                                                            <span className="font-semibold truncate">{schemaName}</span>
                                                         </div>
-                                                    )}
-                                                    <div>
-                                                        {tables.map((schema) => {
-                                                            const isSuggested =
-                                                                suggestedTablesMap[schema.table] !== undefined
-                                                            const tooltip =
-                                                                suggestedTablesMap[schema.table] ??
-                                                                'This table is suggested to be enabled for this source'
-                                                            const { tableName } = splitDirectQueryTableName(
-                                                                schema.table,
-                                                                source.payload.schema
-                                                            )
+                                                        <span className="text-xs text-muted-alt whitespace-nowrap">
+                                                            {selectedTablesCount} of {tables.length} tables queryable
+                                                        </span>
+                                                    </div>
+                                                ),
+                                                content: (
+                                                    <div className="bg-bg-light">
+                                                        <div>
+                                                            {tables.map((schema) => {
+                                                                const isSuggested =
+                                                                    suggestedTablesMap[schema.table] !== undefined
+                                                                const tooltip =
+                                                                    suggestedTablesMap[schema.table] ??
+                                                                    'This table is suggested to be enabled for this source'
+                                                                const { tableName } = splitDirectQueryTableName(
+                                                                    schema.table,
+                                                                    source.payload.schema
+                                                                )
 
-                                                            return (
-                                                                <div
-                                                                    key={schema.table}
-                                                                    className="grid grid-cols-[auto_minmax(0,1fr)_auto] gap-3 px-4 py-2 border-b last:border-b-0 items-center"
-                                                                >
-                                                                    <LemonCheckbox
-                                                                        checked={schema.should_sync}
-                                                                        onChange={(checked) =>
-                                                                            onClickCheckbox(schema, checked)
-                                                                        }
-                                                                    />
-                                                                    <div className="flex items-center gap-2 min-w-0">
-                                                                        <span
-                                                                            className="font-mono cursor-pointer truncate"
-                                                                            onClick={() =>
-                                                                                onClickCheckbox(
-                                                                                    schema,
-                                                                                    !schema.should_sync
-                                                                                )
+                                                                return (
+                                                                    <div
+                                                                        key={schema.table}
+                                                                        className={`grid items-center border-b last:border-b-0 px-6 py-1 ${
+                                                                            showRows
+                                                                                ? 'grid-cols-[auto_minmax(0,1fr)_auto] gap-2'
+                                                                                : 'grid-cols-[auto_minmax(0,1fr)] gap-2'
+                                                                        }`}
+                                                                    >
+                                                                        <LemonCheckbox
+                                                                            checked={schema.should_sync}
+                                                                            onChange={(checked) =>
+                                                                                onClickCheckbox(schema, checked)
                                                                             }
-                                                                        >
-                                                                            {tableName}
-                                                                        </span>
-                                                                        {schema.description && (
-                                                                            <Tooltip title={schema.description}>
-                                                                                <IconInfo className="text-muted-alt text-base shrink-0" />
-                                                                            </Tooltip>
-                                                                        )}
-                                                                        {isSuggested && (
-                                                                            <Tooltip title={tooltip} placement="top">
-                                                                                <LemonTag
-                                                                                    type="primary"
-                                                                                    className="cursor-help shrink-0"
+                                                                        />
+                                                                        <div className="flex items-center gap-2 min-w-0">
+                                                                            <span
+                                                                                className="font-mono cursor-pointer truncate"
+                                                                                onClick={() =>
+                                                                                    onClickCheckbox(
+                                                                                        schema,
+                                                                                        !schema.should_sync
+                                                                                    )
+                                                                                }
+                                                                            >
+                                                                                {tableName}
+                                                                            </span>
+                                                                            {schema.description && (
+                                                                                <Tooltip title={schema.description}>
+                                                                                    <IconInfo className="text-muted-alt text-base shrink-0" />
+                                                                                </Tooltip>
+                                                                            )}
+                                                                            {isSuggested && (
+                                                                                <Tooltip
+                                                                                    title={tooltip}
+                                                                                    placement="top"
                                                                                 >
-                                                                                    Suggested
-                                                                                </LemonTag>
-                                                                            </Tooltip>
+                                                                                    <LemonTag
+                                                                                        type="primary"
+                                                                                        className="cursor-help shrink-0"
+                                                                                    >
+                                                                                        Suggested
+                                                                                    </LemonTag>
+                                                                                </Tooltip>
+                                                                            )}
+                                                                        </div>
+                                                                        {showRows && (
+                                                                            <span className="text-sm text-muted-alt text-right">
+                                                                                {schema.rows != null
+                                                                                    ? schema.rows
+                                                                                    : 'Unknown'}
+                                                                            </span>
                                                                         )}
                                                                     </div>
-                                                                    <span className="text-sm text-muted-alt text-right">
-                                                                        {showRows
-                                                                            ? schema.rows != null
-                                                                                ? schema.rows
-                                                                                : 'Unknown'
-                                                                            : ''}
-                                                                    </span>
-                                                                </div>
-                                                            )
-                                                        })}
+                                                                )
+                                                            })}
+                                                        </div>
                                                     </div>
-                                                </div>
-                                            ),
-                                        }
-                                    })}
-                                />
-                            </div>
+                                                ),
+                                            }
+                                        })}
+                                    />
+                                </div>
+                            </>
                         ) : (
                             <div className="border rounded px-4 py-8 text-center text-muted-alt">No tables found</div>
                         )

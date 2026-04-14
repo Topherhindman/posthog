@@ -5,6 +5,7 @@ import { IconQuestion } from '@posthog/icons'
 import { LemonButton, LemonDivider, LemonSkeleton, LemonTag, Link, Tooltip } from '@posthog/lemon-ui'
 
 import { AccessControlAction } from 'lib/components/AccessControlAction'
+import { FEATURE_FLAGS } from 'lib/constants'
 import { useFloatingContainer } from 'lib/hooks/useFloatingContainerContext'
 import { LemonMarkdown } from 'lib/lemon-ui/LemonMarkdown'
 import { nonHogFunctionTemplatesLogic } from 'scenes/data-pipelines/utils/nonHogFunctionTemplatesLogic'
@@ -19,7 +20,7 @@ import { AccessControlLevel, AccessControlResourceType } from '~/types'
 
 import { DataWarehouseInitialBillingLimitNotice } from '../DataWarehouseInitialBillingLimitNotice'
 import SchemaForm from '../external/forms/SchemaForm'
-import SourceForm from '../external/forms/SourceForm'
+import SourceForm, { SourceAccessMethodSelector } from '../external/forms/SourceForm'
 import { SyncProgressStep } from '../external/forms/SyncProgressStep'
 import { WebhookSetupForm } from '../external/forms/WebhookSetupForm'
 import { FreeHistoricalSyncsBanner } from '../FreeHistoricalSyncsBanner'
@@ -27,6 +28,17 @@ import { DatawarehouseTableForm } from '../new/DataWarehouseTableForm'
 import { availableSourcesDataLogic } from './availableSourcesDataLogic'
 import { dataWarehouseTableLogic } from './dataWarehouseTableLogic'
 import { sourceWizardLogic } from './sourceWizardLogic'
+
+export const getEffectiveAccessMethod = (
+    currentStep: number,
+    draftAccessMethod: 'warehouse' | 'direct' | undefined,
+    persistedAccessMethod: 'warehouse' | 'direct'
+): 'warehouse' | 'direct' => {
+    if (currentStep === 2 && draftAccessMethod) {
+        return draftAccessMethod
+    }
+    return persistedAccessMethod
+}
 
 export const scene: SceneExport = {
     component: NewSourceWizardScene,
@@ -106,9 +118,21 @@ function InternalSourcesWizard(props: NewSourcesWizardProps): JSX.Element {
         connectors,
         isSelfManagedSource,
         source,
+        sourceConnectionDetails,
+        featureFlags,
     } = useValues(sourceWizardLogic)
-    const { onBack, onSubmit, setInitialConnector } = useActions(sourceWizardLogic)
+    const { onBack, onSubmit, setInitialConnector, setSourceConnectionDetailsValue, updateSource } =
+        useActions(sourceWizardLogic)
     const { tableLoading: manualLinkIsLoading } = useValues(dataWarehouseTableLogic)
+    const selectedAccessMethod = getEffectiveAccessMethod(
+        currentStep,
+        sourceConnectionDetails?.access_method,
+        source.access_method
+    )
+    const showAccessMethodSelector =
+        currentStep === 2 &&
+        selectedConnector?.name === 'Postgres' &&
+        !!featureFlags[FEATURE_FLAGS.DWH_POSTGRES_DIRECT_QUERY]
 
     const mainContainer = useFloatingContainer()
 
@@ -186,13 +210,26 @@ function InternalSourcesWizard(props: NewSourcesWizardProps): JSX.Element {
         <div>
             {!isWrapped && <DataWarehouseInitialBillingLimitNotice />}
             <>
+                {showAccessMethodSelector && (
+                    <>
+                        <SourceAccessMethodSelector
+                            value={selectedAccessMethod}
+                            onChange={(accessMethod) => {
+                                updateSource({ access_method: accessMethod })
+                                setSourceConnectionDetailsValue('access_method', accessMethod)
+                            }}
+                        />
+                        <LemonDivider className="my-4" />
+                    </>
+                )}
+
                 {selectedConnector && (
                     <div className="flex items-center gap-3 mb-4">
                         <DataWarehouseSourceIcon type={selectedConnector.name} size="small" disableTooltip />
                         <div>
                             <h4 className="text-lg font-semibold mb-0">{modalTitle}</h4>
                             <p className="text-sm text-muted-alt mb-0">
-                                {source.access_method === 'direct'
+                                {selectedAccessMethod === 'direct'
                                     ? `Query selected ${selectedConnector.label ?? selectedConnector.name} tables live from PostHog. Tables stay in the source database and are not synced into the data warehouse.`
                                     : `Sync data from ${selectedConnector.label ?? selectedConnector.name} into the PostHog data warehouse.`}
                             </p>
@@ -200,7 +237,7 @@ function InternalSourcesWizard(props: NewSourcesWizardProps): JSX.Element {
                     </div>
                 )}
 
-                {selectedConnector && source.access_method !== 'direct' && (
+                {selectedConnector && selectedAccessMethod !== 'direct' && (
                     <FreeHistoricalSyncsBanner hideGetStarted={true} />
                 )}
 
@@ -260,11 +297,16 @@ function FirstStep({ allowedSources }: NewSourcesWizardProps): JSX.Element {
 }
 
 function SecondStep(): JSX.Element {
-    const { selectedConnector, source } = useValues(sourceWizardLogic)
+    const { selectedConnector, source, sourceConnectionDetails } = useValues(sourceWizardLogic)
+    const selectedAccessMethod = getEffectiveAccessMethod(
+        2,
+        sourceConnectionDetails?.access_method,
+        source.access_method
+    )
 
     return selectedConnector ? (
         <div className="space-y-4">
-            {selectedConnector.caption && (
+            {selectedConnector.caption && selectedAccessMethod !== 'direct' && (
                 <LemonMarkdown className="text-sm">{selectedConnector.caption}</LemonMarkdown>
             )}
 
@@ -291,7 +333,11 @@ function SecondStep(): JSX.Element {
 
             <LemonDivider />
 
-            <SourceForm sourceConfig={selectedConnector} initialAccessMethod={source.access_method} />
+            <SourceForm
+                sourceConfig={selectedConnector}
+                initialAccessMethod={sourceConnectionDetails?.access_method ?? source.access_method}
+                showAccessMethodSelector={false}
+            />
         </div>
     ) : (
         <BindLogic logic={dataWarehouseTableLogic} props={{ id: 'new' }}>
