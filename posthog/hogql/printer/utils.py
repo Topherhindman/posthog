@@ -84,6 +84,17 @@ def prepare_ast_for_printing(
 
     context.modifiers = set_default_in_cohort_via(context.modifiers)
 
+    # Load property-level access control restrictions before type resolution so that
+    # FieldType.get_child() can block access to restricted properties during resolution.
+    if context.team_id is not None and not context.restricted_properties:
+        with context.timings.measure("load_restricted_properties"):
+            from products.platform_features.backend.property_access_control import get_restricted_properties_for_team
+
+            context.restricted_properties = get_restricted_properties_for_team(
+                team_id=context.team_id,
+                user=context.user,
+            )
+
     if context.modifiers.inCohortVia == InCohortVia.LEFTJOIN_CONJOINED:
         with context.timings.measure("resolve_in_cohorts_conjoined"):
             resolve_in_cohorts_conjoined(node, dialect, context, stack)

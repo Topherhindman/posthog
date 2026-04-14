@@ -90,6 +90,7 @@ depends_on = [
     "products.messaging",
     "products.notebooks",
     "products.notifications",
+    "products.platform_features",
     "products.posthog_ai",
     "products.product_tours",
     "products.revenue_analytics",
@@ -346,6 +347,7 @@ layer = "modules"
 path = "products.platform_features"
 depends_on = [
     "posthog",
+    "ee",
 ]
 layer = "modules"
 
@@ -516,4 +518,13 @@ expose = [
 ]
 from = [
     "products.tracing",
+]
+
+[[interfaces]]
+expose = [
+    "backend\\.models.*",
+    "backend\\.property_access_control.*",
+]
+from = [
+    "products.platform_features",
 ]
