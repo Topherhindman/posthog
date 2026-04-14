@@ -35,7 +35,7 @@ export interface DataWarehouseSourceSettingsLogicProps {
 }
 
 const REFRESH_INTERVAL = 5000
-const SCHEMA_UPDATE_DEBOUNCE_MS = 1000
+const SCHEMA_UPDATE_DEBOUNCE_MS = 500
 
 interface PendingSchemaUpdate {
     revision: number
@@ -46,7 +46,7 @@ interface SchemaUpdateCache {
     pendingSchemaUpdates?: Record<string, PendingSchemaUpdate>
     inFlightSchemaUpdates?: Record<string, PendingSchemaUpdate>
     schemaUpdateRevisions?: Record<string, number>
-    schemaUpdateTimers?: Record<string, ReturnType<typeof setTimeout>>
+    schemaUpdateFlushTimer?: ReturnType<typeof setTimeout> | null
     reapplyingOptimisticSource?: boolean
 }
 
@@ -83,11 +83,46 @@ function applyPendingSchemaUpdatesToSource(
     )
 }
 
+function applySchemasToSource(
+    source: ExternalDataSource | null,
+    schemas: ExternalDataSourceSchema[]
+): ExternalDataSource | null {
+    return schemas.reduce<ExternalDataSource | null>(
+        (currentSource, schema) => applySchemaToSource(currentSource, schema),
+        source
+    )
+}
+
+function buildSchemaUpdatePayload(
+    schema: ExternalDataSourceSchema
+): Pick<
+    ExternalDataSourceSchema,
+    | 'id'
+    | 'should_sync'
+    | 'sync_type'
+    | 'incremental_field'
+    | 'incremental_field_type'
+    | 'sync_frequency'
+    | 'sync_time_of_day'
+    | 'cdc_table_mode'
+> {
+    return {
+        id: schema.id,
+        should_sync: schema.should_sync,
+        sync_type: schema.sync_type,
+        incremental_field: schema.incremental_field,
+        incremental_field_type: schema.incremental_field_type,
+        sync_frequency: schema.sync_frequency,
+        sync_time_of_day: schema.sync_time_of_day,
+        cdc_table_mode: schema.cdc_table_mode,
+    }
+}
+
 function getSchemaUpdateCache(cache: SchemaUpdateCache): Required<SchemaUpdateCache> {
     cache.pendingSchemaUpdates ??= {}
     cache.inFlightSchemaUpdates ??= {}
     cache.schemaUpdateRevisions ??= {}
-    cache.schemaUpdateTimers ??= {}
+    cache.schemaUpdateFlushTimer ??= null
     cache.reapplyingOptimisticSource ??= false
 
     return cache as Required<SchemaUpdateCache>
@@ -401,57 +436,71 @@ export const dataWarehouseSourceSettingsLogic = kea<dataWarehouseSourceSettingsL
     listeners(({ values, actions, props, cache }) => {
         const schemaUpdateCache = getSchemaUpdateCache(cache)
 
-        const scheduleSchemaUpdateFlush = (schemaId: string): void => {
-            const existingTimer = schemaUpdateCache.schemaUpdateTimers[schemaId]
-            if (existingTimer) {
-                clearTimeout(existingTimer)
+        const scheduleSchemaUpdateFlush = (): void => {
+            if (schemaUpdateCache.schemaUpdateFlushTimer) {
+                clearTimeout(schemaUpdateCache.schemaUpdateFlushTimer)
             }
 
-            schemaUpdateCache.schemaUpdateTimers[schemaId] = setTimeout(() => {
-                delete schemaUpdateCache.schemaUpdateTimers[schemaId]
+            schemaUpdateCache.schemaUpdateFlushTimer = setTimeout(() => {
+                schemaUpdateCache.schemaUpdateFlushTimer = null
 
-                if (schemaUpdateCache.inFlightSchemaUpdates[schemaId]) {
-                    scheduleSchemaUpdateFlush(schemaId)
+                const pendingSchemaUpdates = { ...schemaUpdateCache.pendingSchemaUpdates }
+                if (Object.keys(pendingSchemaUpdates).length === 0) {
                     return
                 }
 
-                const pendingUpdate = schemaUpdateCache.pendingSchemaUpdates[schemaId]
-                if (!pendingUpdate) {
+                if (Object.keys(schemaUpdateCache.inFlightSchemaUpdates).length > 0) {
                     return
                 }
 
-                delete schemaUpdateCache.pendingSchemaUpdates[schemaId]
-                schemaUpdateCache.inFlightSchemaUpdates[schemaId] = pendingUpdate
+                schemaUpdateCache.pendingSchemaUpdates = {}
+                schemaUpdateCache.inFlightSchemaUpdates = pendingSchemaUpdates
 
                 void (async () => {
+                    const batchSchemaUpdates = Object.values(pendingSchemaUpdates)
+
                     try {
-                        const updatedSchema = await api.externalDataSchemas.update(schemaId, pendingUpdate.schema)
-                        const latestPendingUpdate = schemaUpdateCache.pendingSchemaUpdates[schemaId]
+                        const updatedSchemas = await api.externalDataSources.bulkUpdateSchemas(
+                            values.sourceId,
+                            batchSchemaUpdates.map(({ schema }) => buildSchemaUpdatePayload(schema))
+                        )
 
-                        delete schemaUpdateCache.inFlightSchemaUpdates[schemaId]
-                        actions.updateSchemaSuccess(values.source, updatedSchema)
-
-                        if (latestPendingUpdate && latestPendingUpdate.revision > pendingUpdate.revision) {
-                            scheduleSchemaUpdateFlush(schemaId)
-                            return
+                        for (const pendingUpdate of batchSchemaUpdates) {
+                            delete schemaUpdateCache.inFlightSchemaUpdates[pendingUpdate.schema.id]
                         }
 
-                        const nextSource = applySchemaToSource(values.source, updatedSchema)
-                        if (nextSource) {
-                            actions.loadSourceSuccess(nextSource)
+                        actions.updateSchemaSuccess(values.source, updatedSchemas[0])
+
+                        const schemasToApply = updatedSchemas.filter((updatedSchema) => {
+                            const latestPendingUpdate = schemaUpdateCache.pendingSchemaUpdates[updatedSchema.id]
+                            const inFlightUpdate = pendingSchemaUpdates[updatedSchema.id]
+
+                            return !latestPendingUpdate || latestPendingUpdate.revision <= inFlightUpdate.revision
+                        })
+
+                        if (schemasToApply.length > 0) {
+                            const nextSource = applySchemasToSource(values.source, schemasToApply)
+                            if (nextSource) {
+                                actions.loadSourceSuccess(nextSource)
+                            }
+                        }
+
+                        if (Object.keys(schemaUpdateCache.pendingSchemaUpdates).length > 0) {
+                            scheduleSchemaUpdateFlush()
                         }
                     } catch (error: any) {
-                        delete schemaUpdateCache.inFlightSchemaUpdates[schemaId]
-
-                        const latestPendingUpdate = schemaUpdateCache.pendingSchemaUpdates[schemaId]
-                        if (latestPendingUpdate && latestPendingUpdate.revision > pendingUpdate.revision) {
-                            scheduleSchemaUpdateFlush(schemaId)
-                            return
+                        for (const pendingUpdate of batchSchemaUpdates) {
+                            delete schemaUpdateCache.inFlightSchemaUpdates[pendingUpdate.schema.id]
                         }
 
-                        actions.updateSchemaFailure(error?.message || "Can't update schema at this time", error)
-                        actions.loadSource()
-                        lemonToast.error(error?.message || "Can't update schema at this time")
+                        if (Object.keys(schemaUpdateCache.pendingSchemaUpdates).length > 0) {
+                            scheduleSchemaUpdateFlush()
+                        } else {
+                            actions.loadSource()
+                        }
+
+                        actions.updateSchemaFailure(error?.message || "Can't update schemas at this time", error)
+                        lemonToast.error(error?.message || "Can't update schemas at this time")
                     }
                 })()
             }, SCHEMA_UPDATE_DEBOUNCE_MS)
@@ -473,7 +522,7 @@ export const dataWarehouseSourceSettingsLogic = kea<dataWarehouseSourceSettingsL
                     actions.loadSourceSuccess(optimisticSource)
                 }
 
-                scheduleSchemaUpdateFlush(schema.id)
+                scheduleSchemaUpdateFlush()
             },
             loadSourceSuccess: () => {
                 const optimisticSchemaUpdates = getOptimisticSchemaUpdates(schemaUpdateCache)
@@ -673,6 +722,8 @@ export const dataWarehouseSourceSettingsLogic = kea<dataWarehouseSourceSettingsL
     beforeUnmount(({ cache }) => {
         const schemaUpdateCache = getSchemaUpdateCache(cache)
 
-        Object.values(schemaUpdateCache.schemaUpdateTimers).forEach(clearTimeout)
+        if (schemaUpdateCache.schemaUpdateFlushTimer) {
+            clearTimeout(schemaUpdateCache.schemaUpdateFlushTimer)
+        }
     }),
 ])

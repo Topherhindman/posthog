@@ -54,9 +54,9 @@ describe('dataWarehouseSourceSettingsLogic', () => {
     })
 
     it('debounces schema saves and only sends the latest queued change', async () => {
-        const updateSchemaSpy = jest
-            .spyOn(api.externalDataSchemas, 'update')
-            .mockImplementation(async (_id, schema) => schema as ExternalDataSourceSchema)
+        const bulkUpdateSchemasSpy = jest
+            .spyOn(api.externalDataSources, 'bulkUpdateSchemas')
+            .mockImplementation(async (_id, schemas) => schemas as ExternalDataSourceSchema[])
 
         logic = dataWarehouseSourceSettingsLogic({ id: 'source-1', availableSources: {} })
         logic.mount()
@@ -68,25 +68,27 @@ describe('dataWarehouseSourceSettingsLogic', () => {
         logic.actions.updateSchema(makeSchema({ should_sync: false }))
 
         expect(logic.values.source?.schemas[0].should_sync).toBe(false)
-        expect(updateSchemaSpy).not.toHaveBeenCalled()
+        expect(bulkUpdateSchemasSpy).not.toHaveBeenCalled()
 
-        await jest.advanceTimersByTimeAsync(1000)
+        await jest.advanceTimersByTimeAsync(500)
 
-        expect(updateSchemaSpy).toHaveBeenCalledTimes(1)
-        expect(updateSchemaSpy).toHaveBeenLastCalledWith('schema-1', expect.objectContaining({ should_sync: false }))
+        expect(bulkUpdateSchemasSpy).toHaveBeenCalledTimes(1)
+        expect(bulkUpdateSchemasSpy).toHaveBeenLastCalledWith('source-1', [
+            expect.objectContaining({ id: 'schema-1', should_sync: false }),
+        ])
     })
 
     it('keeps newer queued changes when an older save resolves later', async () => {
         let resolveFirstRequest: ((schema: ExternalDataSourceSchema) => void) | null = null
-        const updateSchemaSpy = jest.spyOn(api.externalDataSchemas, 'update').mockImplementation(
-            (_id, schema) =>
-                new Promise<ExternalDataSourceSchema>((resolve) => {
+        const bulkUpdateSchemasSpy = jest.spyOn(api.externalDataSources, 'bulkUpdateSchemas').mockImplementation(
+            (_id, schemas) =>
+                new Promise<ExternalDataSourceSchema[]>((resolve) => {
                     if (!resolveFirstRequest) {
-                        resolveFirstRequest = resolve
+                        resolveFirstRequest = (schema) => resolve([schema])
                         return
                     }
 
-                    resolve(schema as ExternalDataSourceSchema)
+                    resolve(schemas as ExternalDataSourceSchema[])
                 })
         )
 
@@ -97,9 +99,9 @@ describe('dataWarehouseSourceSettingsLogic', () => {
         jest.useFakeTimers()
 
         logic.actions.updateSchema(makeSchema({ should_sync: true }))
-        await jest.advanceTimersByTimeAsync(1000)
+        await jest.advanceTimersByTimeAsync(500)
 
-        expect(updateSchemaSpy).toHaveBeenCalledTimes(1)
+        expect(bulkUpdateSchemasSpy).toHaveBeenCalledTimes(1)
         expect(logic.values.source?.schemas[0].should_sync).toBe(true)
 
         logic.actions.updateSchema(makeSchema({ should_sync: false }))
@@ -110,10 +112,12 @@ describe('dataWarehouseSourceSettingsLogic', () => {
 
         expect(logic.values.source?.schemas[0].should_sync).toBe(false)
 
-        await jest.advanceTimersByTimeAsync(1000)
+        await jest.advanceTimersByTimeAsync(500)
 
-        expect(updateSchemaSpy).toHaveBeenCalledTimes(2)
-        expect(updateSchemaSpy).toHaveBeenLastCalledWith('schema-1', expect.objectContaining({ should_sync: false }))
+        expect(bulkUpdateSchemasSpy).toHaveBeenCalledTimes(2)
+        expect(bulkUpdateSchemasSpy).toHaveBeenLastCalledWith('source-1', [
+            expect.objectContaining({ id: 'schema-1', should_sync: false }),
+        ])
         expect(logic.values.source?.schemas[0].should_sync).toBe(false)
     })
 })

@@ -135,20 +135,30 @@ def postgres_error_to_message(error: Exception) -> str:
 
 
 def direct_postgres_session_setup_sql(
-    schema: str,
+    schema: str | None,
     connection_metadata: dict[str, object] | None = None,
     host: str | None = None,
-) -> str:
-    quoted_schema = escape_postgres_identifier(schema)
+) -> str | None:
     engine = connection_metadata.get("engine") if isinstance(connection_metadata, dict) else None
     database = connection_metadata.get("database") if isinstance(connection_metadata, dict) else None
+    normalized_schema = schema.strip() if isinstance(schema, str) and schema.strip() else None
 
     if engine == "duckdb" or (host is not None and host.endswith(".postwh.com")):
         if isinstance(database, str) and database.strip():
             quoted_database = escape_postgres_identifier(database.strip())
-            return f"USE {quoted_database}.{quoted_schema}"
-        return f"USE {quoted_schema}"
+            if normalized_schema:
+                quoted_schema = escape_postgres_identifier(normalized_schema)
+                return f"USE {quoted_database}.{quoted_schema}"
+            return f"USE {quoted_database}"
+        if normalized_schema:
+            quoted_schema = escape_postgres_identifier(normalized_schema)
+            return f"USE {quoted_schema}"
+        return None
 
+    if not normalized_schema:
+        return None
+
+    quoted_schema = escape_postgres_identifier(normalized_schema)
     return f"SET search_path TO {quoted_schema}"
 
 
@@ -538,14 +548,13 @@ class HogQLQueryExecutor:
                         connection_kwargs["sslmode"] = "require"
 
                     with psycopg.connect(**connection_kwargs) as connection:
-                        if source_schema:
-                            connection.execute(
-                                direct_postgres_session_setup_sql(
-                                    source_schema,
-                                    source.connection_metadata,
-                                    host,
-                                )
-                            )
+                        session_setup_sql = direct_postgres_session_setup_sql(
+                            source_schema,
+                            source.connection_metadata,
+                            host,
+                        )
+                        if session_setup_sql:
+                            connection.execute(session_setup_sql)
                         connection.adapters.register_loader("date", LenientDirectPostgresDateLoader)
                         with connection.cursor() as cursor:
                             cursor.execute(self.direct_postgres_sql, self.direct_postgres_values or None)

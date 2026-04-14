@@ -143,7 +143,7 @@ class ExternalDataSchemaSerializer(serializers.ModelSerializer):
         return schema.cdc_table_mode
 
     def update(self, instance: ExternalDataSchema, validated_data: dict[str, Any]) -> ExternalDataSchema:
-        data = self.context["request"].data
+        data = self.initial_data if isinstance(self.initial_data, dict) else {}
 
         sync_type = data.get("sync_type")
 

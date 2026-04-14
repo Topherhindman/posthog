@@ -29,6 +29,7 @@ import { dayjs } from 'lib/dayjs'
 import { More } from 'lib/lemon-ui/LemonButton/More'
 import { featureFlagLogic } from 'lib/logic/featureFlagLogic'
 import { groupBy, pluralize } from 'lib/utils'
+import { newInternalTab } from 'lib/utils/newInternalTab'
 import {
     SyncTypeLabelMap,
     buildTableQueryUrl,
@@ -344,7 +345,14 @@ function DirectQuerySchemaGroups({
                                                 </SourceEditorAction>
                                                 <div className="flex items-center gap-1 min-w-0">
                                                     {schema.should_sync ? (
-                                                        <Link to={getPreviewUrl(qualifiedName)} className="truncate">
+                                                        <Link
+                                                            to={getPreviewUrl(qualifiedName)}
+                                                            className="truncate"
+                                                            onClick={(event) => {
+                                                                event.preventDefault()
+                                                                newInternalTab(getPreviewUrl(qualifiedName))
+                                                            }}
+                                                        >
                                                             {tableName}
                                                         </Link>
                                                     ) : (
@@ -675,7 +683,13 @@ export const SchemaTable = ({ schemas, isLoading, isDirectQuerySource }: SchemaT
                             if (schema.table) {
                                 const query = defaultQuery(schema.table.name, schema.table.columns)
                                 return (
-                                    <Link to={urls.sqlEditor({ query: query.source.query })}>
+                                    <Link
+                                        to={urls.sqlEditor({ query: query.source.query })}
+                                        onClick={(event) => {
+                                            event.preventDefault()
+                                            newInternalTab(urls.sqlEditor({ query: query.source.query }))
+                                        }}
+                                    >
                                         <code>{schema.table.name}</code>
                                     </Link>
                                 )
@@ -779,7 +793,9 @@ export const SchemaTable = ({ schemas, isLoading, isDirectQuerySource }: SchemaT
                                                                     type="tertiary"
                                                                     size="xsmall"
                                                                     fullWidth
-                                                                    to={getPreviewUrl(schema.table.name)}
+                                                                    onClick={() =>
+                                                                        newInternalTab(getPreviewUrl(schema.table.name))
+                                                                    }
                                                                 >
                                                                     Open in SQL editor
                                                                 </LemonButton>

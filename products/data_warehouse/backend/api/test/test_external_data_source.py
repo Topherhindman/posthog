@@ -175,6 +175,49 @@ class TestExternalDataSource(APIBaseTest):
         assert ExternalDataSource.objects.count() == 0
 
     @patch(
+        "products.data_warehouse.backend.api.external_data_schema.external_data_workflow_exists",
+        return_value=False,
+    )
+    def test_bulk_update_schemas(self, _mock_workflow_exists):
+        source = self._create_external_data_source()
+        schema_one = ExternalDataSchema.objects.create(
+            name="Customers",
+            team_id=self.team.pk,
+            source=source,
+            should_sync=True,
+            sync_type=ExternalDataSchema.SyncType.FULL_REFRESH,
+        )
+        schema_two = ExternalDataSchema.objects.create(
+            name="Invoices",
+            team_id=self.team.pk,
+            source=source,
+            should_sync=True,
+            sync_type=ExternalDataSchema.SyncType.FULL_REFRESH,
+        )
+
+        response = self.client.patch(
+            f"/api/environments/{self.team.pk}/external_data_sources/{source.id}/bulk_update_schemas",
+            data={
+                "schemas": [
+                    {"id": str(schema_one.id), "should_sync": False},
+                    {"id": str(schema_two.id), "should_sync": False},
+                ]
+            },
+            format="json",
+        )
+
+        assert response.status_code == status.HTTP_200_OK
+        assert {schema["id"]: schema["should_sync"] for schema in response.json()} == {
+            str(schema_one.id): False,
+            str(schema_two.id): False,
+        }
+
+        schema_one.refresh_from_db()
+        schema_two.refresh_from_db()
+        assert schema_one.should_sync is False
+        assert schema_two.should_sync is False
+
+    @patch(
         "posthog.temporal.data_imports.sources.stripe.source.StripeSource.validate_credentials",
         return_value=(True, None),
     )
@@ -873,7 +916,16 @@ class TestExternalDataSource(APIBaseTest):
 
     @patch("products.data_warehouse.backend.api.external_data_source.SourceRegistry.get_source")
     def test_refresh_schemas_creates_new_schemas_and_returns_counts(self, mock_get_source):
-        mock_get_source.return_value.parse_config.return_value = None
+        parsed_config = Mock()
+        parsed_config.to_dict.return_value = {
+            "host": "localhost",
+            "port": "5432",
+            "database": "database",
+            "user": "user",
+            "password": "password",
+            "schema": "analytics",
+        }
+        mock_get_source.return_value.parse_config.return_value = parsed_config
         mock_get_source.return_value.get_schemas.return_value = [
             SourceSchema(name="table_a", supports_incremental=False, supports_append=False),
             SourceSchema(name="table_b", supports_incremental=False, supports_append=False),
@@ -1919,6 +1971,28 @@ class TestExternalDataSource(APIBaseTest):
             for table in STRIPE_ENDPOINTS:
                 assert table in table_names
 
+    @patch("products.data_warehouse.backend.api.external_data_source.SourceRegistry.get_source")
+    def test_database_schema_does_not_request_row_counts(self, mock_get_source):
+        parsed_config = Mock()
+        mock_source = mock_get_source.return_value
+        mock_source.validate_config.return_value = (True, [])
+        mock_source.parse_config.return_value = parsed_config
+        mock_source.validate_credentials.return_value = (True, None)
+        mock_source.get_schemas.return_value = [
+            SourceSchema(name="table_1", supports_incremental=False, supports_append=False, row_count=42)
+        ]
+
+        response = self.client.post(
+            f"/api/environments/{self.team.pk}/external_data_sources/database_schema/",
+            data={
+                "source_type": "Stripe",
+                "api_key": "test",
+            },
+        )
+
+        self.assertEqual(response.status_code, 200)
+        mock_source.get_schemas.assert_called_once_with(parsed_config, self.team.pk)
+
     @patch(
         "posthog.temporal.data_imports.sources.postgres.source.get_postgres_schemas",
         return_value={
@@ -1931,19 +2005,23 @@ class TestExternalDataSource(APIBaseTest):
         },
     )
     @patch(
-        "posthog.temporal.data_imports.sources.postgres.source.get_postgres_row_count",
-        return_value={"table_1": 42},
-    )
-    @patch(
         "posthog.temporal.data_imports.sources.postgres.source.get_postgres_foreign_keys",
         return_value={},
     )
+    @patch("posthog.temporal.data_imports.sources.postgres.source.get_primary_key_columns", return_value={})
+    @patch("posthog.temporal.data_imports.sources.postgres.source.pg_connection")
+    @patch("posthog.temporal.data_imports.sources.postgres.source.get_postgres_row_count")
     def test_internal_postgres(
         self,
-        patch_get_sql_schemas_for_source_type,
         patch_get_postgres_row_count,
+        patch_pg_connection,
+        _patch_get_primary_key_columns,
         _patch_get_postgres_foreign_keys,
+        patch_get_sql_schemas_for_source_type,
     ):
+        patch_pg_connection.return_value.__enter__.return_value = object()
+        patch_pg_connection.return_value.__exit__.return_value = None
+
         # This test checks handling of project ID 2 in Cloud US and project ID 1 in Cloud EU,
         # so let's make sure there are no projects with these IDs in the test DB
         Project.objects.filter(id__in=[1, 2]).delete()
@@ -1970,7 +2048,7 @@ class TestExternalDataSource(APIBaseTest):
                     "should_sync": False,
                     "should_sync_default": True,
                     "description": None,
-                    "rows": 42,
+                    "rows": None,
                     "incremental_fields": [
                         {"label": "id", "type": "integer", "field": "id", "field_type": "integer", "nullable": True}
                     ],
@@ -2023,7 +2101,7 @@ class TestExternalDataSource(APIBaseTest):
                     "should_sync": False,
                     "should_sync_default": True,
                     "description": None,
-                    "rows": 42,
+                    "rows": None,
                     "incremental_fields": [
                         {"label": "id", "type": "integer", "field": "id", "field_type": "integer", "nullable": True}
                     ],
@@ -2052,6 +2130,8 @@ class TestExternalDataSource(APIBaseTest):
             )
             self.assertEqual(response.status_code, 400)
             self.assertEqual(response.json(), {"message": "Hosts with internal IP addresses are not allowed"})
+
+        patch_get_postgres_row_count.assert_not_called()
 
     @parameterized.expand(
         [
@@ -2801,6 +2881,86 @@ class TestExternalDataSource(APIBaseTest):
         assert response.status_code == 200, response.content
         source.refresh_from_db()
         assert source.prefix == "Updated name"
+
+    @patch("products.data_warehouse.backend.api.external_data_source.SourceRegistry.get_source")
+    def test_update_direct_postgres_schema_filter_refreshes_existing_schemas(self, mock_get_source):
+        source = ExternalDataSource.objects.create(
+            team_id=self.team.pk,
+            source_id=str(uuid.uuid4()),
+            connection_id=str(uuid.uuid4()),
+            destination_id=str(uuid.uuid4()),
+            source_type="Postgres",
+            access_method=ExternalDataSource.AccessMethod.DIRECT,
+            created_by=self.user,
+            prefix="Direct source",
+            job_inputs={
+                "host": "localhost",
+                "port": "5432",
+                "database": "database",
+                "user": "user",
+                "password": "password",
+            },
+        )
+        matching_schema = ExternalDataSchema.objects.create(
+            team_id=self.team.pk,
+            source_id=source.pk,
+            name="analytics.events",
+            should_sync=False,
+            sync_type_config={"schema_metadata": {"columns": [], "foreign_keys": []}},
+        )
+        filtered_out_schema = ExternalDataSchema.objects.create(
+            team_id=self.team.pk,
+            source_id=source.pk,
+            name="public.users",
+            should_sync=True,
+            sync_type_config={"schema_metadata": {"columns": [], "foreign_keys": []}},
+        )
+
+        parsed_config = Mock()
+        parsed_config.to_dict.return_value = {
+            "host": "localhost",
+            "port": "5432",
+            "database": "database",
+            "user": "user",
+            "password": "password",
+            "schema": "analytics",
+        }
+        mock_get_source.return_value.parse_config.return_value = parsed_config
+        mock_get_source.return_value.validate_config.return_value = (True, [])
+        mock_get_source.return_value.validate_credentials.return_value = (True, None)
+        mock_get_source.return_value.get_connection_metadata.return_value = {"database": "ducklake", "engine": "duckdb"}
+        mock_get_source.return_value.get_schemas.return_value = [
+            SourceSchema(
+                name="analytics.events",
+                supports_incremental=False,
+                supports_append=False,
+                columns=[("id", "integer", False)],
+                foreign_keys=[],
+                source_schema="analytics",
+                source_table_name="events",
+            )
+        ]
+
+        response = self.client.patch(
+            f"/api/environments/{self.team.pk}/external_data_sources/{source.pk}/",
+            data={
+                "job_inputs": {
+                    "schema": "analytics",
+                }
+            },
+            format="json",
+        )
+
+        assert response.status_code == 200, response.json()
+        source.refresh_from_db()
+        matching_schema.refresh_from_db()
+        filtered_out_schema.refresh_from_db()
+
+        assert source.job_inputs["schema"] == "analytics"
+        assert [schema["name"] for schema in response.json()["schemas"]] == ["analytics.events"]
+        assert matching_schema.deleted is False
+        assert matching_schema.sync_type_config["schema_metadata"]["source_schema"] == "analytics"
+        assert filtered_out_schema.deleted is True
 
     def test_update_source_cannot_change_access_method(self):
         source = ExternalDataSource.objects.create(

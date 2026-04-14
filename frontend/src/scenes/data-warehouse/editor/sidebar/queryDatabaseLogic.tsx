@@ -40,6 +40,7 @@ import { dataWarehouseJoinsLogic } from '../../external/dataWarehouseJoinsLogic'
 import { dataWarehouseViewsLogic } from '../../saved_queries/dataWarehouseViewsLogic'
 import { viewLinkLogic } from '../../viewLinkLogic'
 import { draftsLogic } from '../draftsLogic'
+import { sqlEditorLogic } from '../sqlEditorLogic'
 import type { queryDatabaseLogicType } from './queryDatabaseLogicType'
 
 export type EditorSidebarTreeRef = React.RefObject<LemonTreeRef> | null
@@ -1105,6 +1106,74 @@ const flattenViewNodes = (nodes: TreeDataItem[], flattenedViews: TreeDataItem[])
     })
 }
 
+const getDirectConnectionSchemaName = (tableNode: TreeDataItem, defaultSchemaName?: string | null): string | null => {
+    const tableName =
+        tableNode.record?.type === 'table' ? (tableNode.record.table?.name ?? tableNode.name) : tableNode.name
+    const dotIndex = tableName.indexOf('.')
+
+    if (dotIndex > 0) {
+        return tableName.slice(0, dotIndex)
+    }
+
+    if (defaultSchemaName && defaultSchemaName.trim()) {
+        return defaultSchemaName.trim()
+    }
+
+    return null
+}
+
+export const groupDirectConnectionTableNodesBySchema = (
+    tableNodes: TreeDataItem[],
+    isSearch: boolean,
+    defaultSchemaName?: string | null
+): TreeDataItem[] => {
+    const tablesBySchema = new Map<string, TreeDataItem[]>()
+    const ungroupedTables: TreeDataItem[] = []
+
+    tableNodes.forEach((tableNode) => {
+        const schemaName = getDirectConnectionSchemaName(tableNode, defaultSchemaName)
+
+        if (!schemaName) {
+            ungroupedTables.push(tableNode)
+            return
+        }
+
+        const currentNodes = tablesBySchema.get(schemaName) ?? []
+        currentNodes.push(tableNode)
+        tablesBySchema.set(schemaName, currentNodes)
+    })
+
+    const schemaFolders = Array.from(tablesBySchema.entries())
+        .sort(([leftSchema], [rightSchema]) => leftSchema.localeCompare(rightSchema))
+        .map(([schemaName, schemaTables]) => ({
+            id: `${isSearch ? 'search-' : ''}schema-${schemaName}`,
+            name: schemaName,
+            type: 'node' as const,
+            record: {
+                type: 'source-folder',
+                sourceType: schemaName,
+            },
+            children: [...schemaTables].sort((leftTable, rightTable) => leftTable.name.localeCompare(rightTable.name)),
+        }))
+
+    if (ungroupedTables.length > 0) {
+        schemaFolders.push({
+            id: `${isSearch ? 'search-' : ''}schema-ungrouped`,
+            name: defaultSchemaName?.trim() || 'Tables',
+            type: 'node',
+            record: {
+                type: 'source-folder',
+                sourceType: defaultSchemaName?.trim() || 'Tables',
+            },
+            children: [...ungroupedTables].sort((leftTable, rightTable) =>
+                leftTable.name.localeCompare(rightTable.name)
+            ),
+        })
+    }
+
+    return schemaFolders
+}
+
 const findTreePath = (items: TreeDataItem[], targetId: string, path: TreeDataItem[] = []): TreeDataItem[] | null => {
     for (const item of items) {
         const nextPath = [...path, item]
@@ -1212,6 +1281,8 @@ export const queryDatabaseLogic = kea<queryDatabaseLogicType>([
             ],
             draftsLogic,
             ['drafts', 'draftsResponseLoading', 'hasMoreDrafts'],
+            sqlEditorLogic,
+            ['selectedDirectSource'],
             featureFlagLogic,
             ['featureFlags'],
             userLogic,
@@ -2070,12 +2141,13 @@ export const queryDatabaseLogic = kea<queryDatabaseLogicType>([
             },
         ],
         displayedTreeData: [
-            (s) => [s.searchTerm, s.searchTreeData, s.treeData, s.connectionId],
+            (s) => [s.searchTerm, s.searchTreeData, s.treeData, s.connectionId, s.selectedDirectSource],
             (
                 searchTerm: string,
                 searchTreeData: TreeDataItem[],
                 treeData: TreeDataItem[],
-                connectionId: string | null
+                connectionId: string | null,
+                selectedDirectSource: { job_inputs?: Record<string, any> } | undefined
             ): TreeDataItem[] => {
                 const sourceData = searchTerm ? searchTreeData : treeData
 
@@ -2086,6 +2158,10 @@ export const queryDatabaseLogic = kea<queryDatabaseLogicType>([
                 const flattenedTables: TreeDataItem[] = []
                 const flattenedViews: TreeDataItem[] = []
                 const additionalItems: TreeDataItem[] = []
+                const defaultSchemaName =
+                    typeof selectedDirectSource?.job_inputs?.schema === 'string'
+                        ? selectedDirectSource.job_inputs.schema
+                        : null
 
                 sourceData.forEach((item) => {
                     if (item.record?.type === 'sources') {
@@ -2116,18 +2192,7 @@ export const queryDatabaseLogic = kea<queryDatabaseLogicType>([
                 })
 
                 return [
-                    ...(flattenedTables.length > 0
-                        ? [
-                              {
-                                  id: searchTerm ? 'search-tables' : 'tables',
-                                  name: 'Tables',
-                                  type: 'node' as const,
-                                  icon: <IconDatabase />,
-                                  record: { type: 'tables' },
-                                  children: flattenedTables,
-                              },
-                          ]
-                        : []),
+                    ...groupDirectConnectionTableNodesBySchema(flattenedTables, !!searchTerm, defaultSchemaName),
                     ...(flattenedViews.length > 0
                         ? [
                               {

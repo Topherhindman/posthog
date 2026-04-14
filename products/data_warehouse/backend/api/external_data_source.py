@@ -45,6 +45,7 @@ from posthog.rbac.user_access_control import UserAccessControlSerializerMixin
 from posthog.temporal.data_imports.sources import SourceRegistry
 from posthog.temporal.data_imports.sources.common.base import ExternalWebhookInfo, FieldType, WebhookSource
 from posthog.temporal.data_imports.sources.common.config import Config
+from posthog.temporal.data_imports.sources.common.schema import SourceSchema
 from posthog.temporal.data_imports.sources.postgres.cdc.config import PostgresCDCConfig
 
 from products.data_warehouse.backend.api.external_data_schema import (
@@ -261,6 +262,51 @@ class ExternalDataSourceConnectionOptionSerializer(serializers.ModelSerializer):
         read_only_fields = ["id", "prefix", "engine"]
 
 
+class ExternalDataSourceBulkUpdateSchemaSerializer(serializers.Serializer):
+    id = serializers.UUIDField(help_text="Schema identifier to update.")
+    should_sync = serializers.BooleanField(required=False, help_text="Whether the schema should be queryable/synced.")
+    sync_type = serializers.ChoiceField(
+        required=False,
+        allow_null=True,
+        choices=ExternalDataSchema.SyncType.choices,
+        help_text="Requested sync mode for the schema.",
+    )
+    incremental_field = serializers.CharField(
+        required=False,
+        allow_null=True,
+        help_text="Incremental cursor field for incremental or append syncs.",
+    )
+    incremental_field_type = serializers.CharField(
+        required=False,
+        allow_null=True,
+        help_text="Type of the incremental cursor field.",
+    )
+    sync_frequency = serializers.CharField(
+        required=False,
+        allow_null=True,
+        help_text="Human-readable sync frequency value.",
+    )
+    sync_time_of_day = serializers.TimeField(
+        required=False,
+        allow_null=True,
+        help_text="UTC anchor time for scheduled syncs.",
+    )
+    cdc_table_mode = serializers.ChoiceField(
+        required=False,
+        allow_null=True,
+        choices=["consolidated", "cdc_only", "both"],
+        help_text="How CDC-backed tables should be exposed.",
+    )
+
+
+class ExternalDataSourceBulkUpdateSchemasSerializer(serializers.Serializer):
+    schemas = ExternalDataSourceBulkUpdateSchemaSerializer(
+        many=True,
+        allow_empty=False,
+        help_text="Schema updates to apply in a single batch.",
+    )
+
+
 class ExternalDataJobSerializers(serializers.ModelSerializer):
     schema = serializers.SerializerMethodField(read_only=True)
     status = serializers.SerializerMethodField(read_only=True)
@@ -448,7 +494,8 @@ class ExternalDataSourceSerializers(UserAccessControlSerializerMixin, serializer
 
     @extend_schema_field(serializers.ListField(child=serializers.DictField()))
     def get_schemas(self, instance: ExternalDataSource):
-        return ExternalDataSchemaSerializer(instance.schemas, many=True, read_only=True, context=self.context).data
+        schemas = instance.schemas.exclude(deleted=True).order_by("name")
+        return ExternalDataSchemaSerializer(schemas, many=True, read_only=True, context=self.context).data
 
     def update(self, instance: ExternalDataSource, validated_data: Any) -> Any:
         request = self.context.get("request")
@@ -475,6 +522,7 @@ class ExternalDataSourceSerializers(UserAccessControlSerializerMixin, serializer
         source_type_model = ExternalDataSourceType(instance.source_type)
         source = SourceRegistry.get_source(source_type_model)
         sensitive_fields = get_sensitive_field_names(source.get_source_config.fields)
+        discovered_schemas: list[SourceSchema] | None = None
 
         new_job_inputs = {**existing_job_inputs, **incoming_job_inputs}
 
@@ -541,6 +589,7 @@ class ExternalDataSourceSerializers(UserAccessControlSerializerMixin, serializer
             if not credentials_valid:
                 raise ValidationError(credentials_error or "Invalid credentials")
             if instance.is_direct_postgres:
+                discovered_schemas = source.get_schemas(source_config, instance.team_id)
                 validated_data["connection_metadata"] = get_direct_postgres_connection_metadata(
                     source_impl=source,
                     source_config=source_config,
@@ -550,6 +599,39 @@ class ExternalDataSourceSerializers(UserAccessControlSerializerMixin, serializer
                 )
 
         updated_source: ExternalDataSource = super().update(instance, validated_data)
+
+        if updated_source.is_direct_postgres and discovered_schemas is not None:
+            schema_names = {schema.name: schema.label for schema in discovered_schemas}
+            descriptions = {schema.name: schema.description for schema in discovered_schemas}
+
+            with transaction.atomic():
+                ExternalDataSource._base_manager.filter(pk=updated_source.pk).select_for_update().get()
+                sync_old_schemas_with_new_schemas(
+                    schema_names,
+                    source_id=str(updated_source.id),
+                    team_id=instance.team_id,
+                    descriptions=descriptions,
+                )
+                reconcile_direct_postgres_schemas(
+                    source=updated_source,
+                    source_schemas=discovered_schemas,
+                    team_id=instance.team_id,
+                )
+
+            updated_source._prefetched_objects_cache = {
+                "schemas": list(
+                    ExternalDataSchema.objects.filter(team_id=instance.team_id, source_id=updated_source.id)
+                    .exclude(deleted=True)
+                    .select_related("table__credential", "table__external_data_source")
+                    .order_by("name")
+                )
+            }
+            updated_source.active_schemas = list(
+                ExternalDataSchema.objects.filter(team_id=instance.team_id, source_id=updated_source.id)
+                .exclude(deleted=True)
+                .filter(Q(should_sync=True) | Q(latest_error__isnull=False))
+                .select_related("source", "table__credential", "table__external_data_source")
+            )
 
         return updated_source
 
@@ -1243,7 +1325,7 @@ class ExternalDataSourceViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixi
             )
 
         try:
-            schemas = source.get_schemas(source_config, self.team_id, True)
+            schemas = source.get_schemas(source_config, self.team_id)
         except Exception as e:
             capture_exception(e, {"source_type": source_type, "team_id": self.team_id})
             return Response(
@@ -1605,6 +1687,55 @@ class ExternalDataSourceViewSet(TeamAndOrgViewSetMixin, AccessControlViewSetMixi
         hog_function.save(update_fields=["inputs", "encrypted_inputs"])
 
         return Response(status=status.HTTP_200_OK, data={"success": True})
+
+    @extend_schema(
+        request=ExternalDataSourceBulkUpdateSchemasSerializer,
+        responses={200: ExternalDataSchemaSerializer(many=True)},
+    )
+    @action(methods=["PATCH"], detail=True)
+    def bulk_update_schemas(self, request: Request, *args: Any, **kwargs: Any) -> Response:
+        source = self.get_object()
+        serializer = ExternalDataSourceBulkUpdateSchemasSerializer(data=request.data)
+        serializer.is_valid(raise_exception=True)
+
+        schema_updates: list[dict[str, Any]] = serializer.validated_data["schemas"]
+        schema_ids = [schema_update["id"] for schema_update in schema_updates]
+
+        if len(set(schema_ids)) != len(schema_ids):
+            raise ValidationError("Schema updates must contain unique ids")
+
+        source_schemas = ExternalDataSchema.objects.filter(
+            team_id=self.team_id,
+            source_id=source.id,
+            id__in=schema_ids,
+        ).select_related("source", "table__credential", "table__external_data_source")
+        source_schemas_by_id = {schema.id: schema for schema in source_schemas}
+
+        if len(source_schemas_by_id) != len(schema_ids):
+            raise ValidationError("One or more schemas could not be found for this source")
+
+        serializer_context = self.get_serializer_context()
+        updated_schemas: list[ExternalDataSchema] = []
+
+        with transaction.atomic():
+            for schema_update in schema_updates:
+                schema_id = schema_update["id"]
+                schema = source_schemas_by_id[schema_id]
+                schema_payload = {key: value for key, value in schema_update.items() if key != "id"}
+
+                schema_serializer = ExternalDataSchemaSerializer(
+                    schema,
+                    data=schema_payload,
+                    partial=True,
+                    context=serializer_context,
+                )
+                schema_serializer.is_valid(raise_exception=True)
+                updated_schemas.append(schema_serializer.save())
+
+        return Response(
+            ExternalDataSchemaSerializer(updated_schemas, many=True, context=serializer_context).data,
+            status=status.HTTP_200_OK,
+        )
 
     @action(methods=["POST"], detail=True)
     def delete_webhook(self, request: Request, *args: Any, **kwargs: Any) -> Response:
