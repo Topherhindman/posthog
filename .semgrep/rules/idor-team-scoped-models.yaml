@@ -122,6 +122,7 @@ rules:
                               |FeatureFlag
                               |TeamExperimentsConfig
                               |TeamFeatureFlagDefaultsConfig
+                              |TeamSessionSummariesConfig
                               |FileSystem
                               |GitHubSyncConfig
                               |GitHubSyncPlan
@@ -314,6 +315,7 @@ rules:
                         |FeatureFlag
                         |TeamExperimentsConfig
                         |TeamFeatureFlagDefaultsConfig
+                        |TeamSessionSummariesConfig
                         |FileSystem
                         |GitHubSyncConfig
                         |GitHubSyncPlan
