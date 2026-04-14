@@ -3,7 +3,7 @@ import typing as t
 from typing import cast
 
 from freezegun import freeze_time
-from posthog.test.base import APIBaseTest
+from posthog.test.base import APIBaseTest, FuzzyInt
 from unittest.mock import Mock, patch
 
 from django.conf import settings
@@ -615,7 +615,8 @@ class TestExternalDataSource(APIBaseTest):
         self._create_external_data_source()
         self._create_external_data_source()
 
-        with self.assertNumQueries(25):
+        # A cached instance setting lookup can shave off one query depending on test order.
+        with self.assertNumQueries(FuzzyInt(24, 25)):
             response = self.client.get(f"/api/environments/{self.team.pk}/external_data_sources/")
         payload = response.json()
 
