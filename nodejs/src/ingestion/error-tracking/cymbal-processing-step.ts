@@ -7,7 +7,7 @@ import { parseEventTimestamp } from '~/worker/ingestion/timestamps'
 import { OVERFLOW_OUTPUT, OverflowOutput } from '../common/outputs'
 import { BatchProcessingStep } from '../pipelines/base-batch-pipeline'
 import { PipelineWarning } from '../pipelines/pipeline.interface'
-import { PipelineResult, drop, ok, redirect } from '../pipelines/results'
+import { PipelineResult, dlq, drop, ok, redirect } from '../pipelines/results'
 import { CymbalClient } from './cymbal/client'
 import { CymbalResponse } from './cymbal/types'
 
@@ -143,13 +143,29 @@ export function createCymbalProcessingStep<T extends CymbalProcessingInput>(
                 return ok({ ...input, event: input.event }, [], warnings)
             })
         } catch (error) {
-            // Non-retriable errors (4xx, validation failures) propagate to crash the batch.
-            // This indicates a bug in our request building that needs fixing.
+            // Non-retriable errors (4xx, validation failures) send all events to DLQ.
+            // This indicates a bug in our request building that needs investigation.
+            const errorObj = error instanceof Error ? error : new Error(String(error))
             logger.error('❌', 'cymbal_batch_processing_error', {
-                error: error instanceof Error ? error.message : String(error),
+                error: errorObj.message,
                 batchSize: inputs.length,
             })
-            throw error
+            return validatedInputs.map(({ input }) =>
+                dlq(
+                    errorObj.message,
+                    errorObj,
+                    [],
+                    [
+                        {
+                            type: 'error_tracking_cymbal_processing_failed',
+                            details: {
+                                eventUuid: input.event.uuid,
+                                error: errorObj.message,
+                            },
+                        },
+                    ]
+                )
+            )
         }
     }
 }

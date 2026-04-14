@@ -73,10 +73,12 @@ export interface CymbalClientConfig {
     timeoutMs: number
     /** Target max body size in bytes for proactive chunking. */
     maxBodyBytes: number
-    /** Number of retry attempts for failed pod-group requests. Defaults to 3. */
-    retries?: number
-    /** Base sleep between retries in ms. Doubles each retry, capped at 10s. Defaults to 100. */
+    /** Total number of attempts for failed pod-group requests. Defaults to 3. */
+    maxAttempts?: number
+    /** Base sleep between retries in ms. Doubles each retry, capped at maxRetrySleepMs. Defaults to 100. */
     retrySleepMs?: number
+    /** Maximum sleep between retries in ms. Defaults to 10000. */
+    maxRetrySleepMs?: number
     /** Custom fetch implementation for testing. Defaults to internalFetch. */
     fetch?: FetchFunction
     /** Custom DNS resolution function for testing. */
@@ -143,16 +145,18 @@ export class CymbalClient {
     private port: string
     private timeoutMs: number
     private maxBodyBytes: number
-    private retries: number
+    private maxAttempts: number
     private retrySleepMs: number
+    private maxRetrySleepMs: number
     private fetch: FetchFunction
     private dnsResolve: DnsResolveFunction
 
     constructor(config: CymbalClientConfig) {
         this.timeoutMs = config.timeoutMs
         this.maxBodyBytes = config.maxBodyBytes
-        this.retries = config.retries ?? 3
+        this.maxAttempts = config.maxAttempts ?? 3
         this.retrySleepMs = config.retrySleepMs ?? 100
+        this.maxRetrySleepMs = config.maxRetrySleepMs ?? 10_000
         this.fetch = config.fetch ?? internalFetch
         this.dnsResolve = config.dnsResolve ?? defaultDnsResolve
 
@@ -250,7 +254,7 @@ export class CymbalClient {
         let lastError: Error | undefined
         let sleepMs = this.retrySleepMs
 
-        for (let attempt = 0; attempt < this.retries; attempt++) {
+        for (let attempt = 0; attempt < this.maxAttempts; attempt++) {
             try {
                 const responses = await this.processExceptionsToUrl(url, items)
                 return responses.map((response) => ({ status: 'success' as const, response }))
@@ -262,16 +266,16 @@ export class CymbalClient {
                     throw error
                 }
 
-                if (attempt < this.retries - 1) {
+                if (attempt < this.maxAttempts - 1) {
                     logger.warn('⚠️', 'cymbal_group_retry', {
                         attempt: attempt + 1,
-                        maxRetries: this.retries,
+                        maxAttempts: this.maxAttempts,
                         error: lastError.message,
                         batchSize: items.length,
                         url,
                     })
                     await new Promise((resolve) => setTimeout(resolve, sleepMs))
-                    sleepMs = Math.min(sleepMs * 2, 10_000)
+                    sleepMs = Math.min(sleepMs * 2, this.maxRetrySleepMs)
                 }
             }
         }

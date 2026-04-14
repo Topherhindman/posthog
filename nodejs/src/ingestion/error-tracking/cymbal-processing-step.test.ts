@@ -337,13 +337,16 @@ describe('createCymbalProcessingStep', () => {
         })
     })
 
-    it('throws on Cymbal client error so Kafka retries the batch', async () => {
+    it('sends all events to DLQ on non-retriable Cymbal error', async () => {
         const inputs = [createInput({ uuid: 'uuid-1' }), createInput({ uuid: 'uuid-2' })]
 
         mockCymbalClient.processExceptions.mockRejectedValueOnce(new Error('Cymbal unavailable'))
 
-        // Error should propagate up so Kafka doesn't commit the offset and retries the batch
-        await expect(step(inputs)).rejects.toThrow('Cymbal unavailable')
+        const results = await step(inputs)
+
+        expect(results).toHaveLength(2)
+        expect(results[0].type).toBe(PipelineResultType.DLQ)
+        expect(results[1].type).toBe(PipelineResultType.DLQ)
     })
 
     describe('ingestion warnings', () => {

@@ -140,7 +140,7 @@ describe('CymbalClient', () => {
 
             const results = await client.processExceptions(toItems([createRequest()]))
             expect(results[0].status).toBe('failed')
-            expect(mockFetch).toHaveBeenCalledTimes(3) // 3 retries
+            expect(mockFetch).toHaveBeenCalledTimes(3) // 3 attempts
         })
 
         it('returns overflow on 429 rate limit errors after retries', async () => {
@@ -370,7 +370,7 @@ describe('CymbalClient', () => {
                 baseUrl: 'http://cymbal.example.com:8080',
                 timeoutMs: 5000,
                 maxBodyBytes: 150,
-                retries: 1, // Single try, no retries for faster test
+                maxAttempts: 1, // Single attempt, no retries for faster test
                 fetch: mockFetch as FetchFunction,
                 dnsResolve: jest.fn().mockResolvedValue(['1.2.3.4']) as DnsResolveFunction,
             })
@@ -539,19 +539,26 @@ describe('CymbalClient', () => {
             const team1Results = [results[0], results[2], results[4]]
             const team2Results = [results[1], results[3]]
 
-            // One team's events all succeeded, the other's all overflowed
+            // One team's events all succeeded, the other's all failed
             const team1Status = team1Results[0].status
             const team2Status = team2Results[0].status
-            expect(new Set([team1Status, team2Status])).toEqual(new Set(['success', 'failed']))
+            expect(team1Status).not.toBe(team2Status)
 
-            // All events for each team should have the same status
-            expect(team1Results.every((r) => r.status === team1Status)).toBe(true)
-            expect(team2Results.every((r) => r.status === team2Status)).toBe(true)
+            // Verify every event for each team has a consistent status
+            for (const r of team1Results) {
+                expect(r.status).toBe(team1Status)
+            }
+            for (const r of team2Results) {
+                expect(r.status).toBe(team2Status)
+            }
 
-            // Success results should have the correct uuid at each position
+            // Verify success results have the correct uuid at each position
+            // and failed results have a reason
             for (let i = 0; i < results.length; i++) {
                 if (results[i].status === 'success') {
                     expect((results[i] as any).response.uuid).toBe(requests[i].uuid)
+                } else {
+                    expect((results[i] as any).reason).toBeDefined()
                 }
             }
         })
