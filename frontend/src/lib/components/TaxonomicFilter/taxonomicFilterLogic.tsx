@@ -578,6 +578,7 @@ export const taxonomicFilterLogic = kea<taxonomicFilterLogicType>([
                                 ? propertyAllowList[TaxonomicFilterGroupType.EventProperties].join(',')
                                 : undefined,
                             exclude_hidden: true,
+                            exclude_restricted: true,
                         }).url,
                         scopedEndpoint:
                             eventNames.length > 0
@@ -589,6 +590,7 @@ export const taxonomicFilterLogic = kea<taxonomicFilterLogicType>([
                                           ? propertyAllowList[TaxonomicFilterGroupType.EventProperties].join(',')
                                           : undefined,
                                       exclude_hidden: true,
+                                      exclude_restricted: true,
                                   }).url
                                 : undefined,
                         expandLabel: ({ count, expandedCount }: { count: number; expandedCount: number }) =>
@@ -891,6 +893,7 @@ export const taxonomicFilterLogic = kea<taxonomicFilterLogicType>([
                                 ? propertyAllowList[TaxonomicFilterGroupType.PersonProperties].join(',')
                                 : undefined,
                             exclude_hidden: true,
+                            exclude_restricted: true,
                         }).url,
                         getName: (personProperty: PersonProperty) => personProperty.name,
                         getValue: (personProperty: PersonProperty) => personProperty.name,
@@ -1380,6 +1383,7 @@ export const taxonomicFilterLogic = kea<taxonomicFilterLogicType>([
                         type: 'group',
                         group_type_index: type.group_type_index,
                         exclude_hidden: true,
+                        exclude_restricted: true,
                     }).url,
                     valuesEndpoint: (key) =>
                         `api/projects/${projectId}/groups/property_values?${toParams({
