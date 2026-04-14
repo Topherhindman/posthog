@@ -529,7 +529,7 @@ class HogQLQueryExecutor:
         assert self.direct_postgres_sql is not None
         assert self.direct_postgres_source_id is not None
 
-        from posthog.temporal.data_imports.sources.postgres.postgres import SSL_REQUIRED_AFTER_DATE, _get_sslmode
+        from posthog.temporal.data_imports.sources.postgres.postgres import _get_sslmode, source_requires_ssl
 
         from products.data_warehouse.backend.models.external_data_source import ExternalDataSource
 
@@ -540,7 +540,7 @@ class HogQLQueryExecutor:
 
         postgres_source, source_config = validate_direct_postgres_source_config(source, self.team)
         source_schema = source_config.schema
-        require_ssl = source.created_at >= SSL_REQUIRED_AFTER_DATE
+        require_ssl = source_requires_ssl(source)
         settings = self._effective_direct_postgres_settings()
         statement_timeout_ms = (
             max(settings.max_execution_time or DIRECT_POSTGRES_DEFAULT_STATEMENT_TIMEOUT_SECONDS, 1) * 1000
