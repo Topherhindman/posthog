@@ -76,7 +76,7 @@ function UpdateSourceConnectionFormContainer({
     return (
         <>
             <span className="block mb-2">Overwrite your existing configuration here</span>
-            <Form logic={logic} formKey="sourceConfig" enableFormOnSubmit>
+            <Form logic={dataWarehouseSourceSettingsLogic} props={logicProps} formKey="sourceConfig" enableFormOnSubmit>
                 <SourceFormComponent
                     showPrefix={false}
                     showDescription={true}

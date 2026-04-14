@@ -123,6 +123,17 @@ export default function SchemaForm(): JSX.Element {
         )
     }
 
+    const tablesAllToggledOn = databaseSchema.length > 0 && databaseSchema.every((schema) => schema.should_sync)
+
+    const toggleAllTables = (shouldSync: boolean): void => {
+        setDatabaseSchemas(
+            databaseSchema.map((schema) => ({
+                ...schema,
+                should_sync: shouldSync,
+            }))
+        )
+    }
+
     const showRows = databaseSchema.some((schema) => schema.rows != null)
 
     return (

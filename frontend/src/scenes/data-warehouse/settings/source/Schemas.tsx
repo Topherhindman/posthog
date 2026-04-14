@@ -854,9 +854,14 @@ export const SchemaTable = ({
                                                                     type="tertiary"
                                                                     size="xsmall"
                                                                     fullWidth
-                                                                    onClick={() =>
-                                                                        newInternalTab(getPreviewUrl(schema.table.name))
-                                                                    }
+                                                                    onClick={() => {
+                                                                        const table = schema.table
+                                                                        if (!table) {
+                                                                            return
+                                                                        }
+
+                                                                        newInternalTab(getPreviewUrl(table.name))
+                                                                    }}
                                                                 >
                                                                     Open in SQL editor
                                                                 </LemonButton>

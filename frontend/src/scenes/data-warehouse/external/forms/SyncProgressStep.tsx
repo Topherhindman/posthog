@@ -140,13 +140,15 @@ export const SyncProgressStep = (): JSX.Element => {
             key: 'actions',
             width: 0,
             render: function RenderStatus(_, schema) {
-                if (schema.table && (isDirectQuerySource || schema.status === 'Completed')) {
+                const table = schema.table
+
+                if (table && (isDirectQuerySource || schema.status === 'Completed')) {
                     return (
                         <LemonButton
                             className="my-1"
                             type="primary"
                             onClick={() => {
-                                const previewUrl = getPreviewQueryUrl(schema.table.name, sourceAccessMethod, sourceId)
+                                const previewUrl = getPreviewQueryUrl(table.name, sourceAccessMethod, sourceId)
                                 cancelWizard()
                                 router.actions.push(previewUrl)
                             }}

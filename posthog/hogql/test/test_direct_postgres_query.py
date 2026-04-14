@@ -1,4 +1,5 @@
 from datetime import date, timedelta
+from typing import Any, cast
 from uuid import uuid4
 
 from posthog.test.base import APIBaseTest
@@ -707,8 +708,10 @@ class TestDirectPostgresQuery(APIBaseTest):
         response = executor.execute()
 
         self.assertEqual(response.results, [(date(2026, 3, 26),)])
+        connection_metadata = cast(dict[str, Any], source.connection_metadata)
+        job_inputs = cast(dict[str, Any], source.job_inputs)
         mocked_connection.execute.assert_called_once_with(
-            f"USE {escape_postgres_identifier(source.connection_metadata['database'])}.{escape_postgres_identifier(source.job_inputs['schema'])}"
+            f"USE {escape_postgres_identifier(connection_metadata['database'])}.{escape_postgres_identifier(job_inputs['schema'])}"
         )
         mocked_connection.adapters.register_loader.assert_any_call("date", LenientDirectPostgresDateLoader)
 

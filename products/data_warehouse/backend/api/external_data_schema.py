@@ -179,21 +179,22 @@ class ExternalDataSchemaSerializer(serializers.ModelSerializer):
 
             # Detect incremental field changes before mutating payload
             incremental_field_changed = False
+            incremental_field = data.get("incremental_field")
             if sync_type in (ExternalDataSchema.SyncType.INCREMENTAL, ExternalDataSchema.SyncType.APPEND):
                 incremental_field_changed = (
-                    payload.get("incremental_field") != data.get("incremental_field")
+                    payload.get("incremental_field") != incremental_field
                     or payload.get("incremental_field_last_value") is None
                 )
 
             if "incremental_field" in data:
-                payload["incremental_field"] = data.get("incremental_field")
+                payload["incremental_field"] = incremental_field
             if "incremental_field_type" in data:
                 payload["incremental_field_type"] = data.get("incremental_field_type")
 
             if incremental_field_changed:
-                if instance.table is not None:
+                if instance.table is not None and isinstance(incremental_field, str):
                     # Get the max_value and set it on incremental_field_last_value
-                    max_value = instance.table.get_max_value_for_column(data.get("incremental_field"))
+                    max_value = instance.table.get_max_value_for_column(incremental_field)
                     if max_value:
                         instance.update_incremental_field_value(max_value, save=False)
                     else:

@@ -107,7 +107,12 @@ describe('dataWarehouseSourceSettingsLogic', () => {
         logic.actions.updateSchema(makeSchema({ should_sync: false }))
         expect(logic.values.source?.schemas[0].should_sync).toBe(false)
 
-        resolveFirstRequest?.(makeSchema({ should_sync: true }))
+        const resolveFirstRequestFn: any = resolveFirstRequest
+        if (!resolveFirstRequestFn) {
+            throw new Error('Expected first schema update request to be pending')
+        }
+
+        resolveFirstRequestFn(makeSchema({ should_sync: true }))
         await Promise.resolve()
 
         expect(logic.values.source?.schemas[0].should_sync).toBe(false)
