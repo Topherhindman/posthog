@@ -47,16 +47,16 @@ const integrationGet = (): ToolBase<typeof IntegrationGetSchema, Schemas.Integra
     },
 })
 
-const IntegrationDeleteSchema = IntegrationsDestroyParams.omit({ project_id: true })
+const IntegrationDeleteSchema = IntegrationsDestroyParams.omit({ organization_id: true })
 
 const integrationDelete = (): ToolBase<typeof IntegrationDeleteSchema, unknown> => ({
     name: 'integration-delete',
     schema: IntegrationDeleteSchema,
     handler: async (context: Context, params: z.infer<typeof IntegrationDeleteSchema>) => {
-        const projectId = await context.stateManager.getProjectId()
+        const orgId = await context.stateManager.getOrgID()
         const result = await context.api.request<unknown>({
             method: 'DELETE',
-            path: `/api/projects/${projectId}/integrations/${params.id}/`,
+            path: `/api/organizations/${orgId}/integrations/${params.id}/`,
         })
         return result
     },
