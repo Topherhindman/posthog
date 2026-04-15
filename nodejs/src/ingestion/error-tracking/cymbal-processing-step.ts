@@ -4,10 +4,9 @@ import { logger } from '~/utils/logger'
 import { invalidTimestampCounter } from '~/worker/ingestion/event-pipeline/metrics'
 import { parseEventTimestamp } from '~/worker/ingestion/timestamps'
 
-import { OVERFLOW_OUTPUT, OverflowOutput } from '../common/outputs'
-import { BatchProcessingStep } from '../pipelines/base-batch-pipeline'
+import { BatchRetryStepResult } from '../pipelines/batch-retry'
 import { PipelineWarning } from '../pipelines/pipeline.interface'
-import { PipelineResult, dlq, drop, ok, redirect } from '../pipelines/results'
+import { drop, ok } from '../pipelines/results'
 import { CymbalClient } from './cymbal/client'
 import { CymbalResponse } from './cymbal/types'
 
@@ -75,8 +74,8 @@ function getCymbalProcessingWarnings(response: CymbalResponse, eventUuid: string
  */
 export function createCymbalProcessingStep<T extends CymbalProcessingInput>(
     cymbalClient: CymbalClient
-): BatchProcessingStep<T, T, OverflowOutput> {
-    return async function cymbalProcessingStep(inputs: T[]): Promise<PipelineResult<T, OverflowOutput>[]> {
+): (inputs: T[]) => Promise<BatchRetryStepResult<T>[]> {
+    return async function cymbalProcessingStep(inputs: T[]): Promise<BatchRetryStepResult<T>[]> {
         if (inputs.length === 0) {
             return []
         }
@@ -91,9 +90,6 @@ export function createCymbalProcessingStep<T extends CymbalProcessingInput>(
         })
 
         // Build requests paired with estimated sizes for proactive chunking.
-        // Kafka message sizes overestimate the CymbalRequest size (they include
-        // headers, distinct_id, and other fields stripped from the request),
-        // which is conservative — we split slightly earlier than needed, never too late.
         const items = validatedInputs.map(({ input, timestamp }) => ({
             request: {
                 uuid: input.event.uuid,
@@ -105,67 +101,38 @@ export function createCymbalProcessingStep<T extends CymbalProcessingInput>(
             estimatedSize: input.messageBytes ?? 0,
         }))
 
-        try {
-            const results = await cymbalClient.processExceptions(items)
+        const results = await cymbalClient.processExceptions(items)
 
-            // Map results back to pipeline results, maintaining 1:1 correspondence
-            return results.map((result, index) => {
-                const { input, warnings: timestampWarnings } = validatedInputs[index]
+        // Map results back, maintaining 1:1 correspondence
+        return results.map((result, index) => {
+            const { input, warnings: timestampWarnings } = validatedInputs[index]
 
-                // Retries exhausted — redirect to overflow topic for later processing
-                if (result.status === 'failed') {
-                    logger.warn('⚠️', 'cymbal_event_overflow', {
-                        eventUuid: input.event.uuid,
-                        teamId: input.team.id,
-                        reason: result.reason,
-                    })
-                    return redirect(result.reason, OVERFLOW_OUTPUT)
+            // Cymbal call failed — pass through for the wrapper to retry/overflow
+            if (result.status === 'failed') {
+                return {
+                    status: 'failed' as const,
+                    retriable: result.retriable,
+                    reason: result.reason,
                 }
+            }
 
-                // Null response means the event should be dropped (suppressed)
-                if (!result.response) {
-                    logger.debug('🔇', 'cymbal_event_suppressed', {
-                        eventUuid: input.event.uuid,
-                        teamId: input.team.id,
-                    })
-                    return drop('suppressed')
-                }
+            // Null response means the event should be dropped (suppressed)
+            if (!result.response) {
+                logger.debug('🔇', 'cymbal_event_suppressed', {
+                    eventUuid: input.event.uuid,
+                    teamId: input.team.id,
+                })
+                return { status: 'success' as const, result: drop('suppressed') }
+            }
 
-                // Replace event properties with Cymbal's processed properties.
-                // Cymbal returns the full properties object with $exception_list, $exception_fingerprint, etc.
-                // We mutate the event directly since it's not used after this step.
-                input.event.properties = result.response.properties
+            // Replace event properties with Cymbal's processed properties.
+            input.event.properties = result.response.properties
 
-                // Combine timestamp validation warnings with Cymbal processing warnings
-                const cymbalWarnings = getCymbalProcessingWarnings(result.response, input.event.uuid)
-                const warnings = [...timestampWarnings, ...cymbalWarnings]
+            // Combine timestamp validation warnings with Cymbal processing warnings
+            const cymbalWarnings = getCymbalProcessingWarnings(result.response, input.event.uuid)
+            const warnings = [...timestampWarnings, ...cymbalWarnings]
 
-                return ok({ ...input, event: input.event }, [], warnings)
-            })
-        } catch (error) {
-            // Non-retriable errors (4xx, validation failures) send all events to DLQ.
-            // This indicates a bug in our request building that needs investigation.
-            const errorObj = error instanceof Error ? error : new Error(String(error))
-            logger.error('❌', 'cymbal_batch_processing_error', {
-                error: errorObj.message,
-                batchSize: inputs.length,
-            })
-            return validatedInputs.map(({ input }) =>
-                dlq(
-                    errorObj.message,
-                    errorObj,
-                    [],
-                    [
-                        {
-                            type: 'error_tracking_cymbal_processing_failed',
-                            details: {
-                                eventUuid: input.event.uuid,
-                                error: errorObj.message,
-                            },
-                        },
-                    ]
-                )
-            )
-        }
+            return { status: 'success' as const, result: ok({ ...input, event: input.event }, [], warnings) }
+        })
     }
 }

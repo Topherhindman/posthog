@@ -28,6 +28,7 @@ import { createHogTransformEventStep } from '../event-processing/hog-transform-e
 import { createReadOnlyProcessGroupsStep } from '../event-processing/readonly-process-groups-step'
 import { IngestionOutputs } from '../outputs/ingestion-outputs'
 import { BatchPipelineUnwrapper } from '../pipelines/batch-pipeline-unwrapper'
+import { BatchRetryOptions } from '../pipelines/batch-retry'
 import { newBatchPipelineBuilder } from '../pipelines/builders'
 import { TopHogRegistry, count, countOk, createTopHogWrapper } from '../pipelines/extensions/tophog'
 import { createBatch, createUnwrapper } from '../pipelines/helpers'
@@ -72,6 +73,8 @@ export interface ErrorTrackingPipelineConfig {
     overflowLaneTTLRefreshService?: OverflowRedirectService
     /** TopHog registry for metrics. */
     topHog: TopHogRegistry
+    /** Retry and circuit breaker options for Cymbal batch processing. */
+    cymbalRetryOptions?: BatchRetryOptions
 }
 
 /**
@@ -100,7 +103,7 @@ export function createErrorTrackingPipeline(
     ErrorTrackingPipelineInput,
     ErrorTrackingPipelineOutput,
     { message: Message },
-    OverflowOutput
+    OverflowOutput | DlqOutput
 > {
     const {
         outputs,
@@ -179,9 +182,13 @@ export function createErrorTrackingPipeline(
                                     .pipeBatch(createOverflowLaneTTLRefreshStep(overflowLaneTTLRefreshService))
                                     // Process through Cymbal as a batch (before enrichment - Cymbal only
                                     // needs raw exception data, not person/geoip/group data).
-                                    // Retries are handled per pod-group inside CymbalClient.
-                                    // Failed events are redirected to overflow, not thrown.
-                                    .pipeBatch(createCymbalProcessingStep(cymbalClient))
+                                    // The resilient wrapper retries failed events, redirects
+                                    // remaining failures to overflow, and trips a circuit breaker
+                                    // if the service is fully down.
+                                    .pipeBatchWithRetry(
+                                        createCymbalProcessingStep(cymbalClient),
+                                        config.cymbalRetryOptions
+                                    )
                                     // Enrich, prepare, create, and emit events
                                     // Batch fetch person (read-only, no updates)
                                     .pipeBatch(createFetchPersonBatchStep(personRepository))
@@ -235,7 +242,7 @@ export async function runErrorTrackingPipeline(
         ErrorTrackingPipelineInput,
         ErrorTrackingPipelineOutput,
         { message: Message },
-        OverflowOutput
+        OverflowOutput | DlqOutput
     >,
     messages: Message[]
 ): Promise<void> {

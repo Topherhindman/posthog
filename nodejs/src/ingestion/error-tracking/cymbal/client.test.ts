@@ -134,64 +134,91 @@ describe('CymbalClient', () => {
             expect(unwrapSuccess(results[0])).toBeNull()
         })
 
-        it('returns overflow on 5xx errors after retries', async () => {
+        it('returns retriable failed on 5xx errors', async () => {
             const client = createClient()
-            mockFetch.mockResolvedValue({ status: 500, json: () => Promise.resolve({}) })
+            mockFetch.mockResolvedValueOnce({ status: 500, json: () => Promise.resolve({}) })
 
             const results = await client.processExceptions(toItems([createRequest()]))
             expect(results[0].status).toBe('failed')
-            expect(mockFetch).toHaveBeenCalledTimes(3) // 3 attempts
+            if (results[0].status === 'failed') {
+                expect(results[0].retriable).toBe(true)
+            }
+            expect(mockFetch).toHaveBeenCalledTimes(1)
         })
 
-        it('returns overflow on 429 rate limit errors after retries', async () => {
+        it('returns retriable failed on 429 rate limit errors', async () => {
             const client = createClient()
-            mockFetch.mockResolvedValue({ status: 429, json: () => Promise.resolve({}) })
+            mockFetch.mockResolvedValueOnce({ status: 429, json: () => Promise.resolve({}) })
 
             const results = await client.processExceptions(toItems([createRequest()]))
             expect(results[0].status).toBe('failed')
+            if (results[0].status === 'failed') {
+                expect(results[0].retriable).toBe(true)
+            }
+            expect(mockFetch).toHaveBeenCalledTimes(1)
         })
 
-        it('throws non-retriable error on 4xx errors (except 429)', async () => {
+        it('returns non-retriable failed result on 4xx errors (except 429)', async () => {
             const client = createClient()
             mockFetch.mockResolvedValueOnce({ status: 400, json: () => Promise.resolve({}) })
 
-            await expect(client.processExceptions(toItems([createRequest()]))).rejects.toThrow('Cymbal returned 400')
+            const results = await client.processExceptions(toItems([createRequest()]))
+            expect(results).toHaveLength(1)
+            expect(results[0].status).toBe('failed')
+            if (results[0].status === 'failed') {
+                expect(results[0].retriable).toBe(false)
+                expect(results[0].reason).toContain('Cymbal returned 400')
+            }
         })
 
-        it('throws on response length mismatch', async () => {
+        it('returns non-retriable failed result on response length mismatch', async () => {
             const client = createClient()
             mockFetch.mockResolvedValueOnce({
                 status: 200,
                 json: () => Promise.resolve([createResponse()]),
             })
 
-            await expect(client.processExceptions(toItems([createRequest(), createRequest()]))).rejects.toThrow(
-                'Cymbal response length mismatch: got 1, expected 2'
-            )
+            const results = await client.processExceptions(toItems([createRequest(), createRequest()]))
+            expect(results).toHaveLength(2)
+            for (const result of results) {
+                expect(result.status).toBe('failed')
+                if (result.status === 'failed') {
+                    expect(result.retriable).toBe(false)
+                    expect(result.reason).toContain('length mismatch')
+                }
+            }
         })
 
-        it('throws when response is not an array', async () => {
+        it('returns non-retriable failed result when response is not an array', async () => {
             const client = createClient()
             mockFetch.mockResolvedValueOnce({
                 status: 200,
                 json: () => Promise.resolve({ error: 'unexpected error format' }),
             })
 
-            await expect(client.processExceptions(toItems([createRequest()]))).rejects.toThrow(
-                'Invalid Cymbal response'
-            )
+            const results = await client.processExceptions(toItems([createRequest()]))
+            expect(results).toHaveLength(1)
+            expect(results[0].status).toBe('failed')
+            if (results[0].status === 'failed') {
+                expect(results[0].retriable).toBe(false)
+                expect(results[0].reason).toContain('Invalid Cymbal response')
+            }
         })
 
-        it('throws when response element has invalid structure', async () => {
+        it('returns non-retriable failed result when response element has invalid structure', async () => {
             const client = createClient()
             mockFetch.mockResolvedValueOnce({
                 status: 200,
                 json: () => Promise.resolve([{ invalid: 'no uuid field' }]),
             })
 
-            await expect(client.processExceptions(toItems([createRequest()]))).rejects.toThrow(
-                'Invalid Cymbal response'
-            )
+            const results = await client.processExceptions(toItems([createRequest()]))
+            expect(results).toHaveLength(1)
+            expect(results[0].status).toBe('failed')
+            if (results[0].status === 'failed') {
+                expect(results[0].retriable).toBe(false)
+                expect(results[0].reason).toContain('Invalid Cymbal response')
+            }
         })
 
         it('accepts null elements in response array', async () => {
@@ -209,48 +236,46 @@ describe('CymbalClient', () => {
             expect(unwrapSuccess(results[1])).toBeNull()
         })
 
-        it('returns overflow after exhausting retries on network errors', async () => {
+        it('returns retriable failed on network errors', async () => {
             const client = createClient()
-            // Reject all 3 retry attempts
-            mockFetch.mockRejectedValue(new Error('Network error'))
+            mockFetch.mockRejectedValueOnce(new Error('Network error'))
 
             const results = await client.processExceptions(toItems([createRequest()]))
             expect(results).toHaveLength(1)
             expect(results[0].status).toBe('failed')
             if (results[0].status === 'failed') {
+                expect(results[0].retriable).toBe(true)
                 expect(results[0].reason).toContain('Network error')
             }
-            // 3 attempts
-            expect(mockFetch).toHaveBeenCalledTimes(3)
+            expect(mockFetch).toHaveBeenCalledTimes(1)
         })
 
-        it('returns overflow after exhausting retries on timeout', async () => {
+        it('returns retriable failed on timeout', async () => {
             const client = createClient()
-            mockFetch.mockRejectedValue(new Error('The operation was aborted due to timeout'))
+            mockFetch.mockRejectedValueOnce(new Error('The operation was aborted due to timeout'))
 
             const results = await client.processExceptions(toItems([createRequest()]))
             expect(results).toHaveLength(1)
             expect(results[0].status).toBe('failed')
-            expect(mockFetch).toHaveBeenCalledTimes(3)
+            if (results[0].status === 'failed') {
+                expect(results[0].retriable).toBe(true)
+            }
+            expect(mockFetch).toHaveBeenCalledTimes(1)
         })
 
-        it('retries then succeeds on transient errors', async () => {
+        it('does not retry — retries are handled by the pipeline wrapper', async () => {
             const client = createClient()
-            const response = createResponse()
-            // First attempt fails, second succeeds
+            // First call fails — client returns failed, does NOT retry
             mockFetch.mockRejectedValueOnce(new Error('Network error'))
-            mockFetch.mockResolvedValueOnce({
-                status: 200,
-                json: () => Promise.resolve([response]),
-            })
 
             const results = await client.processExceptions(toItems([createRequest()]))
             expect(results).toHaveLength(1)
-            expect(results[0].status).toBe('success')
-            expect(mockFetch).toHaveBeenCalledTimes(2)
+            expect(results[0].status).toBe('failed')
+            // Only 1 call — no retry
+            expect(mockFetch).toHaveBeenCalledTimes(1)
         })
 
-        it('propagates DNS errors', async () => {
+        it('returns retriable failed on DNS errors', async () => {
             const client = new CymbalClient({
                 baseUrl: 'http://cymbal.example.com:8080',
                 timeoutMs: 5000,
@@ -259,7 +284,13 @@ describe('CymbalClient', () => {
                 dnsResolve: jest.fn().mockRejectedValue(new Error('DNS failed')) as DnsResolveFunction,
             })
 
-            await expect(client.processExceptions(toItems([createRequest()]))).rejects.toThrow('DNS failed')
+            const results = await client.processExceptions(toItems([createRequest()]))
+            expect(results).toHaveLength(1)
+            expect(results[0].status).toBe('failed')
+            if (results[0].status === 'failed') {
+                expect(results[0].retriable).toBe(true)
+                expect(results[0].reason).toBe('DNS failed')
+            }
             expect(mockFetch).not.toHaveBeenCalled()
         })
     })
@@ -365,12 +396,11 @@ describe('CymbalClient', () => {
             expect(mockFetch).toHaveBeenCalledTimes(2)
         })
 
-        it('returns overflow for all events in group when chunk fails after retries', async () => {
+        it('returns failed for all events in group when chunk returns 5xx', async () => {
             const smallClient = new CymbalClient({
                 baseUrl: 'http://cymbal.example.com:8080',
                 timeoutMs: 5000,
                 maxBodyBytes: 150,
-                maxAttempts: 1, // Single attempt, no retries for faster test
                 fetch: mockFetch as FetchFunction,
                 dnsResolve: jest.fn().mockResolvedValue(['1.2.3.4']) as DnsResolveFunction,
             })
@@ -386,6 +416,7 @@ describe('CymbalClient', () => {
             const results = await smallClient.processExceptions(toItems(requests, 100))
             expect(results).toHaveLength(3)
             expect(results.every((r) => r.status === 'failed')).toBe(true)
+            expect(results.every((r) => r.status === 'failed' && r.retriable)).toBe(true)
         })
     })
 

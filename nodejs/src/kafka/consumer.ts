@@ -360,6 +360,38 @@ export class KafkaConsumer {
         return this.rdKafkaConsumer.isConnected() ? this.rdKafkaConsumer.assignments() : []
     }
 
+    /**
+     * Pause fetching for all assigned partitions. The consumer stays in the
+     * group and heartbeats continue, but `consume()` returns empty. Use
+     * `poll()` while paused to keep `max.poll.interval.ms` alive.
+     */
+    public pause(): void {
+        const assignments = this.assignments()
+        if (assignments.length > 0) {
+            this.rdKafkaConsumer.pause(assignments.map((a) => ({ topic: a.topic, partition: a.partition })))
+        }
+    }
+
+    /**
+     * Resume fetching for all assigned partitions after a `pause()`.
+     */
+    public resume(): void {
+        const assignments = this.assignments()
+        if (assignments.length > 0) {
+            this.rdKafkaConsumer.resume(assignments.map((a) => ({ topic: a.topic, partition: a.partition })))
+        }
+    }
+
+    /**
+     * Lightweight poll that resets the broker's `max.poll.interval.ms` timer
+     * without consuming messages. Call periodically while paused to prevent
+     * the broker from removing the consumer from the group.
+     */
+    public async poll(): Promise<void> {
+        await promisifyCallback<Message[]>((cb) => this.rdKafkaConsumer.consume(1, cb))
+        this.heartbeat()
+    }
+
     public offsetsStore(topicPartitionOffsets: TopicPartitionOffset[]): void {
         return this.rdKafkaConsumer.offsetsStore(topicPartitionOffsets)
     }

@@ -15,9 +15,10 @@ import { PromiseScheduler } from '../../utils/promise-scheduler'
 import { TeamManager } from '../../utils/team-manager'
 import { GroupTypeManager } from '../../worker/ingestion/group-type-manager'
 import { PersonRepository } from '../../worker/ingestion/persons/repositories/person-repository'
-import { OverflowOutput } from '../common/outputs'
+import { DlqOutput, OverflowOutput } from '../common/outputs'
 import { BatchPipelineUnwrapper } from '../pipelines/batch-pipeline-unwrapper'
 import { TopHog } from '../tophog'
+import { CircuitOpenError } from '../utils/circuit-breaker'
 import { MainLaneOverflowRedirect } from '../utils/overflow-redirect/main-lane-overflow-redirect'
 import { OverflowLaneOverflowRedirect } from '../utils/overflow-redirect/overflow-lane-overflow-redirect'
 import { OverflowRedirectService } from '../utils/overflow-redirect/overflow-redirect-service'
@@ -40,6 +41,11 @@ export interface ErrorTrackingConsumerOptions {
     cymbalBaseUrl: string
     cymbalTimeoutMs: number
     cymbalMaxBodyBytes: number
+    cymbalRetryMaxAttempts: number
+    cymbalRetrySleepMs: number
+    cymbalCircuitBreakerFailureThreshold: number
+    cymbalCircuitBreakerCooldownMs: number
+    cymbalCircuitBreakerPollIntervalMs: number
     lane: IngestionLane
     overflowEnabled: boolean
     overflowBucketCapacity: number
@@ -96,7 +102,7 @@ export class ErrorTrackingConsumer {
         { message: Message },
         ErrorTrackingPipelineOutput,
         { message: Message },
-        OverflowOutput
+        OverflowOutput | DlqOutput
     >
     protected cymbalClient: CymbalClient
     protected promiseScheduler: PromiseScheduler
@@ -207,6 +213,14 @@ export class ErrorTrackingConsumer {
             overflowRedirectService: this.overflowRedirectService,
             overflowLaneTTLRefreshService: this.overflowLaneTTLRefreshService,
             topHog: this.topHog,
+            cymbalRetryOptions: {
+                maxAttempts: this.config.cymbalRetryMaxAttempts,
+                retrySleepMs: this.config.cymbalRetrySleepMs,
+                circuitBreaker: {
+                    failureThreshold: this.config.cymbalCircuitBreakerFailureThreshold,
+                    cooldownMs: this.config.cymbalCircuitBreakerCooldownMs,
+                },
+            },
         })
 
         logger.info('✅', `${this.name} - pipeline initialized`)
@@ -237,6 +251,59 @@ export class ErrorTrackingConsumer {
         return this.kafkaConsumer.isHealthy()
     }
 
+    /**
+     * Run the pipeline, handling CircuitOpenError by pausing consumption and
+     * retrying after cooldown. While paused, the consumer stays in the Kafka
+     * group (heartbeats continue) and K8s healthchecks remain healthy. Lag
+     * accumulates until the service recovers.
+     */
+    private async processWithCircuitBreaker(messages: Message[]): Promise<void> {
+        while (true) {
+            try {
+                await runErrorTrackingPipeline(this.pipeline, messages)
+                return
+            } catch (error) {
+                if (!(error instanceof CircuitOpenError)) {
+                    throw error
+                }
+
+                batchProcessedCounter.inc({ status: 'circuit_open' })
+                logger.warn('⚠️', `${this.name} - circuit breaker open, pausing consumption`, {
+                    size: messages.length,
+                    cooldownMs: this.config.cymbalCircuitBreakerCooldownMs,
+                })
+
+                // Pause partitions so no new messages are fetched while we wait
+                this.kafkaConsumer.pause()
+                try {
+                    await this.waitForCooldown()
+                } finally {
+                    this.kafkaConsumer.resume()
+                }
+
+                logger.info('🔄', `${this.name} - cooldown elapsed, retrying batch`, {
+                    size: messages.length,
+                })
+            }
+        }
+    }
+
+    /**
+     * Wait for the circuit breaker cooldown period while keeping the Kafka
+     * connection and K8s healthcheck alive.
+     */
+    private async waitForCooldown(): Promise<void> {
+        const endTime = Date.now() + this.config.cymbalCircuitBreakerCooldownMs
+        const pollIntervalMs = this.config.cymbalCircuitBreakerPollIntervalMs
+        while (Date.now() < endTime) {
+            await this.kafkaConsumer.poll()
+            const remaining = endTime - Date.now()
+            if (remaining > 0) {
+                await new Promise((resolve) => setTimeout(resolve, Math.min(pollIntervalMs, remaining)))
+            }
+        }
+    }
+
     public async handleKafkaBatch(messages: Message[]): Promise<void> {
         // Update offset timestamps for lag metrics
         for (const message of messages) {
@@ -248,7 +315,7 @@ export class ErrorTrackingConsumer {
         }
 
         try {
-            await runErrorTrackingPipeline(this.pipeline, messages)
+            await this.processWithCircuitBreaker(messages)
             batchProcessedCounter.inc({ status: 'success' })
         } catch (error) {
             batchProcessedCounter.inc({ status: 'error' })

@@ -16,10 +16,16 @@ import { SingleIngestionOutput } from '../outputs/single-ingestion-output'
 import { ErrorTrackingConsumer, ErrorTrackingHogTransformer } from './error-tracking-consumer'
 
 /** Creates a mock KafkaConsumer for tests that don't need actual Kafka connections */
-const createMockKafkaConsumer = (): jest.Mocked<Pick<KafkaConsumer, 'connect' | 'disconnect' | 'isHealthy'>> => ({
+const createMockKafkaConsumer = (): jest.Mocked<
+    Pick<KafkaConsumer, 'connect' | 'disconnect' | 'isHealthy' | 'pause' | 'resume' | 'poll' | 'heartbeat'>
+> => ({
     connect: jest.fn().mockResolvedValue(undefined),
     disconnect: jest.fn().mockResolvedValue(undefined),
     isHealthy: jest.fn().mockReturnValue({ status: 'ok' }),
+    pause: jest.fn(),
+    resume: jest.fn(),
+    poll: jest.fn().mockResolvedValue(undefined),
+    heartbeat: jest.fn(),
 })
 
 jest.setTimeout(60000)
@@ -106,6 +112,10 @@ const createMockHogTransformer = (): jest.Mocked<ErrorTrackingHogTransformer> =>
     processInvocationResults: jest.fn().mockResolvedValue(undefined),
 })
 
+// Capture before any spies are installed — used by the circuit breaker test
+// to restore real clock behavior inside waitForCooldown.
+const realDateNow = Date.now
+
 let offsetIncrementer = 0
 
 const createKafkaMessage = (event: PipelineEvent, token: string): Message => {
@@ -149,6 +159,11 @@ describe('ErrorTrackingConsumer', () => {
             cymbalBaseUrl: hub.ERROR_TRACKING_CYMBAL_BASE_URL,
             cymbalTimeoutMs: hub.ERROR_TRACKING_CYMBAL_TIMEOUT_MS,
             cymbalMaxBodyBytes: hub.ERROR_TRACKING_CYMBAL_MAX_BODY_BYTES,
+            cymbalRetryMaxAttempts: 3,
+            cymbalRetrySleepMs: 100,
+            cymbalCircuitBreakerFailureThreshold: 5,
+            cymbalCircuitBreakerCooldownMs: 30_000,
+            cymbalCircuitBreakerPollIntervalMs: 10,
             lane: hub.INGESTION_LANE ?? ('main' as const),
             overflowEnabled:
                 !!hub.ERROR_TRACKING_CONSUMER_OVERFLOW_TOPIC &&
@@ -410,6 +425,71 @@ describe('ErrorTrackingConsumer', () => {
                 mockProducerObserver.getProducedKafkaMessagesForTopic('clickhouse_events_json_test')
             expect(producedMessages).toHaveLength(1)
             expect(producedMessages[0].value.person_mode).toBe('full')
+        })
+    })
+
+    describe('circuit breaker', () => {
+        it('should pause, wait, and retry when all events fail', async () => {
+            // Restore real Date.now — the cooldown wait loop needs a real clock.
+            // Must use the module-level capture since the spy replaces Date.now.
+            ;(Date.now as jest.Mock).mockImplementation(realDateNow)
+
+            // Use short timeouts so the test runs fast
+            consumer['config'].cymbalCircuitBreakerCooldownMs = 50
+            consumer['config'].cymbalCircuitBreakerPollIntervalMs = 10
+            consumer['config'].cymbalRetryMaxAttempts = 1
+            consumer['config'].cymbalRetrySleepMs = 1
+            consumer['config'].cymbalCircuitBreakerFailureThreshold = 1
+            await consumer['initializePipeline']()
+
+            const cymbalClient = consumer['cymbalClient']
+            const kafkaConsumer = consumer['kafkaConsumer'] as unknown as ReturnType<typeof createMockKafkaConsumer>
+
+            // First call fails, triggering CircuitOpenError.
+            // After cooldown, the retry succeeds.
+            let callCount = 0
+            jest.spyOn(cymbalClient, 'processExceptions').mockImplementation((items) => {
+                callCount++
+                if (callCount <= 1) {
+                    return Promise.resolve(
+                        items.map(() => ({
+                            status: 'failed' as const,
+                            retriable: true,
+                            reason: 'service down',
+                        }))
+                    )
+                }
+                return Promise.resolve(
+                    items.map((item: any) => ({
+                        status: 'success' as const,
+                        response: {
+                            uuid: item.request.uuid,
+                            event: item.request.event,
+                            team_id: item.request.team_id,
+                            timestamp: item.request.timestamp,
+                            properties: {
+                                ...item.request.properties,
+                                $exception_fingerprint: `fingerprint-${item.request.uuid}`,
+                                $exception_issue_id: `issue-${item.request.uuid}`,
+                            },
+                        },
+                    }))
+                )
+            })
+
+            const messages = createKafkaMessages([createEvent()])
+            await consumer.handleKafkaBatch(messages)
+
+            // Verify the consumer paused, polled, and resumed during cooldown
+            expect(kafkaConsumer.pause).toHaveBeenCalled()
+            expect(kafkaConsumer.poll).toHaveBeenCalled()
+            expect(kafkaConsumer.resume).toHaveBeenCalled()
+
+            // Verify the event was eventually processed and emitted
+            const producedMessages =
+                mockProducerObserver.getProducedKafkaMessagesForTopic('clickhouse_events_json_test')
+            expect(producedMessages).toHaveLength(1)
+            expect(producedMessages[0].value.event).toBe('$exception')
         })
     })
 })

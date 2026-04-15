@@ -52,7 +52,7 @@ const cymbalRoutingGroupsHistogram = new Histogram({
 /** Result for a single event from Cymbal processing. */
 export type CymbalEventResult =
     | { status: 'success'; response: CymbalResponse | null }
-    | { status: 'failed'; reason: string }
+    | { status: 'failed'; retriable: boolean; reason: string }
 
 /** Function signature for fetch implementation */
 export type FetchFunction = (
@@ -63,22 +63,11 @@ export type FetchFunction = (
 /** Function signature for DNS resolution, injectable for testing */
 export type DnsResolveFunction = (hostname: string) => Promise<string[]>
 
-const cymbalRetriesExhaustedCounter = new Counter({
-    name: 'error_tracking_cymbal_retries_exhausted_total',
-    help: 'Events that failed after exhausting all retries',
-})
-
 export interface CymbalClientConfig {
     baseUrl: string
     timeoutMs: number
     /** Target max body size in bytes for proactive chunking. */
     maxBodyBytes: number
-    /** Total number of attempts for failed pod-group requests. Defaults to 3. */
-    maxAttempts?: number
-    /** Base sleep between retries in ms. Doubles each retry, capped at maxRetrySleepMs. Defaults to 100. */
-    retrySleepMs?: number
-    /** Maximum sleep between retries in ms. Defaults to 10000. */
-    maxRetrySleepMs?: number
     /** Custom fetch implementation for testing. Defaults to internalFetch. */
     fetch?: FetchFunction
     /** Custom DNS resolution function for testing. */
@@ -137,26 +126,20 @@ function jumpConsistentHash(key: number, numBuckets: number): number {
  * all events are sent to that address — no grouping overhead.
  *
  * Note: This client does not implement retry logic. Retries are handled at
- * the pipeline level using pipeBatchWithRetry(). The client throws CymbalError
- * with isRetriable flag to indicate whether errors should be retried.
+ * the pipeline level using pipeBatchWithRetry(). The client returns per-event
+ * failed results with a retriable flag for the wrapper to handle.
  */
 export class CymbalClient {
     private hostname: string
     private port: string
     private timeoutMs: number
     private maxBodyBytes: number
-    private maxAttempts: number
-    private retrySleepMs: number
-    private maxRetrySleepMs: number
     private fetch: FetchFunction
     private dnsResolve: DnsResolveFunction
 
     constructor(config: CymbalClientConfig) {
         this.timeoutMs = config.timeoutMs
         this.maxBodyBytes = config.maxBodyBytes
-        this.maxAttempts = config.maxAttempts ?? 3
-        this.retrySleepMs = config.retrySleepMs ?? 100
-        this.maxRetrySleepMs = config.maxRetrySleepMs ?? 10_000
         this.fetch = config.fetch ?? internalFetch
         this.dnsResolve = config.dnsResolve ?? defaultDnsResolve
 
@@ -191,8 +174,7 @@ export class CymbalClient {
      * @param items - Array of requests paired with their estimated byte size
      * @returns Array of results maintaining 1:1 position correspondence with input.
      *          Each result is either a success (with response or null for suppressed)
-     *          or an overflow redirect for events that failed after retries.
-     * @throws CymbalError only for non-retriable errors (4xx, validation failures)
+     *          or a failure with retriable flag for the pipeline wrapper to handle.
      */
     async processExceptions(items: { request: CymbalRequest; estimatedSize: number }[]): Promise<CymbalEventResult[]> {
         if (items.length === 0) {
@@ -201,7 +183,14 @@ export class CymbalClient {
 
         cymbalBatchSizeHistogram.observe(items.length)
 
-        const endpoints = await this.resolveEndpoints()
+        let endpoints: string[]
+        try {
+            endpoints = await this.resolveEndpoints()
+        } catch (error) {
+            const reason = error instanceof Error ? error.message : String(error)
+            logger.warn('⚠️', 'cymbal_dns_resolution_failed', { hostname: this.hostname, error: reason })
+            return items.map(() => ({ status: 'failed' as const, retriable: true, reason }))
+        }
 
         // Build pod groups — for single endpoint, everything goes to one group
         type PodGroup = { index: number; item: (typeof items)[0] }[]
@@ -232,7 +221,7 @@ export class CymbalClient {
             Array.from(podGroups.entries()).map(async ([podIndex, group]) => {
                 const url = `http://${endpoints[podIndex]}:${this.port}`
                 const groupItems = group.map((g) => g.item)
-                const groupResults = await this.processGroupWithRetries(url, groupItems)
+                const groupResults = await this.processGroup(url, groupItems)
                 for (let i = 0; i < groupResults.length; i++) {
                     results[group[i].index] = groupResults[i]
                 }
@@ -243,55 +232,29 @@ export class CymbalClient {
     }
 
     /**
-     * Process a pod group's items with retries. On retriable failure,
-     * retries the entire group. After exhausting retries, returns overflow
-     * for all events in the group.
+     * Process a pod group's items with a single attempt. Returns per-event
+     * success or failure — never throws. Retriable errors (5xx, timeout,
+     * network) return `{ retriable: true }`, non-retriable errors (4xx,
+     * validation) return `{ retriable: false }`. The pipeline wrapper
+     * decides what to do with each.
      */
-    private async processGroupWithRetries(
+    private async processGroup(
         url: string,
         items: { request: CymbalRequest; estimatedSize: number }[]
     ): Promise<CymbalEventResult[]> {
-        let lastError: Error | undefined
-        let sleepMs = this.retrySleepMs
-
-        for (let attempt = 0; attempt < this.maxAttempts; attempt++) {
-            try {
-                const responses = await this.processExceptionsToUrl(url, items)
-                return responses.map((response) => ({ status: 'success' as const, response }))
-            } catch (error) {
-                lastError = error instanceof Error ? error : new Error(String(error))
-
-                // Non-retriable errors propagate immediately
-                if (error instanceof CymbalError && !error.isRetriable) {
-                    throw error
-                }
-
-                if (attempt < this.maxAttempts - 1) {
-                    logger.warn('⚠️', 'cymbal_group_retry', {
-                        attempt: attempt + 1,
-                        maxAttempts: this.maxAttempts,
-                        error: lastError.message,
-                        batchSize: items.length,
-                        url,
-                    })
-                    await new Promise((resolve) => setTimeout(resolve, sleepMs))
-                    sleepMs = Math.min(sleepMs * 2, this.maxRetrySleepMs)
-                }
-            }
+        try {
+            const responses = await this.processExceptionsToUrl(url, items)
+            return responses.map((response) => ({ status: 'success' as const, response }))
+        } catch (error) {
+            const isCymbalError = error instanceof CymbalError
+            const retriable = isCymbalError ? error.isRetriable : true
+            const reason = error instanceof Error ? error.message : String(error)
+            return items.map(() => ({
+                status: 'failed' as const,
+                retriable,
+                reason,
+            }))
         }
-
-        // Exhausted retries — return failed results
-        cymbalRetriesExhaustedCounter.inc(items.length)
-        logger.error('❌', 'cymbal_group_exhausted_retries', {
-            error: lastError?.message,
-            batchSize: items.length,
-            url,
-        })
-
-        return items.map(() => ({
-            status: 'failed' as const,
-            reason: `Cymbal retries exhausted: ${lastError?.message}`,
-        }))
     }
 
     /**

@@ -35,6 +35,17 @@ export type ErrorTrackingConsumerConfig = {
      *  split large batches before they hit Cymbal's body limit. */
     ERROR_TRACKING_CYMBAL_MAX_BODY_BYTES: number
 
+    /** Max number of attempts for retrying failed Cymbal events */
+    ERROR_TRACKING_CYMBAL_RETRY_MAX_ATTEMPTS: number
+    /** Base sleep in ms between retry attempts (doubles each attempt) */
+    ERROR_TRACKING_CYMBAL_RETRY_SLEEP_MS: number
+    /** Consecutive all-fail batches before the circuit breaker trips */
+    ERROR_TRACKING_CYMBAL_CIRCUIT_BREAKER_FAILURE_THRESHOLD: number
+    /** Cooldown in ms before allowing a probe batch after circuit trips */
+    ERROR_TRACKING_CYMBAL_CIRCUIT_BREAKER_COOLDOWN_MS: number
+    /** Interval in ms between Kafka polls while waiting for circuit breaker cooldown */
+    ERROR_TRACKING_CYMBAL_CIRCUIT_BREAKER_POLL_INTERVAL_MS: number
+
     /** Pipeline name for metrics labeling */
     INGESTION_PIPELINE: string | null
     /** Lane identifier (main, overflow) for metrics labeling */
@@ -56,6 +67,11 @@ export function getDefaultErrorTrackingConsumerConfig(): ErrorTrackingConsumerCo
         ERROR_TRACKING_STATEFUL_OVERFLOW_REDIS_TTL_SECONDS: 300, // 5 minutes
         ERROR_TRACKING_STATEFUL_OVERFLOW_LOCAL_CACHE_TTL_SECONDS: 60, // 1 minute
         ERROR_TRACKING_CYMBAL_MAX_BODY_BYTES: 1_800_000,
+        ERROR_TRACKING_CYMBAL_RETRY_MAX_ATTEMPTS: 3,
+        ERROR_TRACKING_CYMBAL_RETRY_SLEEP_MS: 100,
+        ERROR_TRACKING_CYMBAL_CIRCUIT_BREAKER_FAILURE_THRESHOLD: 5,
+        ERROR_TRACKING_CYMBAL_CIRCUIT_BREAKER_COOLDOWN_MS: 30_000,
+        ERROR_TRACKING_CYMBAL_CIRCUIT_BREAKER_POLL_INTERVAL_MS: 5_000,
         INGESTION_PIPELINE: null,
         INGESTION_LANE: null,
     }
