@@ -47,10 +47,17 @@ describe('initMcpCatObservability', () => {
             getMcpClientVersion: vi.fn().mockReturnValue('1.2.3'),
             getMcpProtocolVersion: vi.fn().mockReturnValue('2024-11-05'),
             getRegion: vi.fn().mockReturnValue('us'),
-            getOrganizationId: vi.fn().mockReturnValue('org-789'),
-            getProjectId: vi.fn().mockReturnValue('proj-101'),
+            getResolvedContext: vi.fn().mockResolvedValue({
+                organizationId: 'org-789',
+                projectId: 'proj-101',
+                projectUuid: 'proj-uuid-101',
+                projectName: 'Project 101',
+            }),
             getClientUserAgent: vi.fn().mockReturnValue('test-agent/1.0'),
             getVersion: vi.fn().mockReturnValue(2),
+            getOAuthClientName: vi.fn().mockResolvedValue('PostHog Code'),
+            getReadOnly: vi.fn().mockReturnValue(true),
+            getTransport: vi.fn().mockReturnValue('streamable-http'),
             ...overrides,
         }
     }
@@ -67,9 +74,9 @@ describe('initMcpCatObservability', () => {
         return options.eventTags
     }
 
-    function getEventPropertiesCallback(): () => Record<string, unknown> {
+    function getEventPropertiesCallback(): () => Promise<Record<string, unknown>> {
         const call = vi.mocked(track).mock.calls[0]!
-        const options = call[2] as { eventProperties: () => Record<string, unknown> }
+        const options = call[2] as { eventProperties: () => Promise<Record<string, unknown>> }
         return options.eventProperties
     }
 
@@ -160,7 +167,7 @@ describe('initMcpCatObservability', () => {
 
         await initMcpCatObservability(server, identity)
 
-        const result = getEventPropertiesCallback()()
+        const result = await getEventPropertiesCallback()()
         expect(result).toEqual({
             ai_product: 'mcp',
             mcp_version: 2,
@@ -169,6 +176,17 @@ describe('initMcpCatObservability', () => {
             mcp_client_version: '1.2.3',
             mcp_protocol_version: '2024-11-05',
             mcp_region: 'us',
+            organization_id: 'org-789',
+            project_id: 'proj-101',
+            project_uuid: 'proj-uuid-101',
+            project_name: 'Project 101',
+            mcp_oauth_client_name: 'PostHog Code',
+            read_only: true,
+            mcp_transport: 'streamable-http',
+            $groups: {
+                organization: 'org-789',
+                project: 'proj-uuid-101',
+            },
         })
     })
 
@@ -181,11 +199,15 @@ describe('initMcpCatObservability', () => {
             getMcpClientVersion: vi.fn().mockReturnValue(undefined),
             getMcpProtocolVersion: vi.fn().mockReturnValue(undefined),
             getRegion: vi.fn().mockReturnValue(undefined),
+            getResolvedContext: vi.fn().mockResolvedValue(undefined),
+            getOAuthClientName: vi.fn().mockResolvedValue(undefined),
+            getReadOnly: vi.fn().mockReturnValue(undefined),
+            getTransport: vi.fn().mockReturnValue(undefined),
         })
 
         await initMcpCatObservability(server, identity)
 
-        const result = getEventPropertiesCallback()()
+        const result = await getEventPropertiesCallback()()
         expect(result).toEqual({
             ai_product: 'mcp',
             mcp_version: undefined,
@@ -194,6 +216,13 @@ describe('initMcpCatObservability', () => {
             mcp_client_version: undefined,
             mcp_protocol_version: undefined,
             mcp_region: undefined,
+            organization_id: undefined,
+            project_id: undefined,
+            project_uuid: undefined,
+            project_name: undefined,
+            mcp_oauth_client_name: undefined,
+            read_only: undefined,
+            mcp_transport: undefined,
         })
     })
 

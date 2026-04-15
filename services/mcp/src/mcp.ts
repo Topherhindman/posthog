@@ -497,11 +497,13 @@ export class MCP extends McpAgent<Env> {
             getMcpClientName: () => this._mcpClientName,
             getMcpClientVersion: () => this._mcpClientVersion,
             getMcpProtocolVersion: () => this._mcpProtocolVersion,
-            getRegion: () => this.requestProperties.region,
-            getOrganizationId: () => this.requestProperties.organizationId,
-            getProjectId: () => this.requestProperties.projectId,
+            getRegion: async () => (await this.cache.get('region')) ?? this.requestProperties.region,
+            getResolvedContext: async () => this.getResolvedAnalyticsContext(await this.getContext()),
             getClientUserAgent: () => this.requestProperties.clientUserAgent,
-            getVersion: () => this.requestProperties.version,
+            getVersion: () => version,
+            getOAuthClientName: async () => (await this.cache.get('clientName')) || undefined,
+            getReadOnly: () => readOnly,
+            getTransport: () => this.requestProperties.transport,
         })
 
         const initDurationMs = this.requestProperties.requestStartTime
