@@ -92,7 +92,7 @@ def strip_restricted_properties(
 def get_restricted_property_names(
     *,
     team_id: int,
-    user: Optional[User],
+    user: User | None,
     property_type: int,
 ) -> set[str]:
     """
@@ -111,7 +111,7 @@ def get_restricted_property_names(
 def get_non_writable_property_names(
     *,
     team_id: int,
-    user: Optional[User],
+    user: User | None,
     property_type: int,
 ) -> set[str]:
     """
@@ -137,9 +137,13 @@ def get_non_writable_property_names(
     if not rules.exists():
         return set()
 
-    rules_by_property: dict[int, list[PropertyAccessControl]] = {}
+    rules_by_property: dict[UUID, list[PropertyAccessControl]] = {}
     for rule in rules:
         prop_def_id = rule.property_definition_id
+
+        if prop_def_id is None:
+            continue
+
         if prop_def_id not in rules_by_property:
             rules_by_property[prop_def_id] = []
         rules_by_property[prop_def_id].append(rule)
@@ -159,6 +163,9 @@ def get_non_writable_property_names(
     non_writable: set[str] = set()
     for _prop_def_id, prop_rules in rules_by_property.items():
         prop_def = prop_rules[0].property_definition
+        if prop_def is None:
+            continue
+
         level = _resolve_access_level(prop_rules, membership=membership, user_role_ids=user_role_ids)
         if level != PropertyAccessLevel.READ_WRITE:
             non_writable.add(prop_def.name)
