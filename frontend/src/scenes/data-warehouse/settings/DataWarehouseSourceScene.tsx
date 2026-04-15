@@ -33,12 +33,13 @@ import { ActivityScope, Breadcrumb, ExternalDataSource } from '~/types'
 
 import type { dataWarehouseSourceSceneLogicType } from './DataWarehouseSourceSceneType'
 import { dataWarehouseSourceSettingsLogic } from './source/dataWarehouseSourceSettingsLogic'
+import { ProjectionTab } from './source/ProjectionTab'
 import { Schemas } from './source/Schemas'
 import { SourceConfiguration } from './source/SourceConfiguration'
 import { Syncs } from './source/Syncs'
 import { WebhookTab } from './source/WebhookTab'
 
-const DATA_WAREHOUSE_SOURCE_SCENE_TABS = ['schemas', 'syncs', 'configuration', 'webhook'] as const
+const DATA_WAREHOUSE_SOURCE_SCENE_TABS = ['schemas', 'projection', 'syncs', 'configuration', 'webhook'] as const
 export type DataWarehouseSourceSceneTab = (typeof DATA_WAREHOUSE_SOURCE_SCENE_TABS)[number]
 
 export interface DataWarehouseSourceSceneProps {
@@ -228,6 +229,8 @@ function ManagedSourceTabs({
         !!featureFlags[FEATURE_FLAGS.DWH_POSTGRES_DIRECT_QUERY]
     )
     const showWebhookTab = !!featureFlags[FEATURE_FLAGS.WAREHOUSE_SOURCE_WEBHOOKS] && !!source?.supports_webhooks
+    const showProjectionTab =
+        !!featureFlags[FEATURE_FLAGS.DWH_POSTGRES_DIRECT_QUERY] && source?.access_method === 'direct'
 
     useEffect(() => {
         if (!showSyncsTab && currentTab === 'syncs') {
@@ -236,7 +239,10 @@ function ManagedSourceTabs({
         if (!showWebhookTab && currentTab === 'webhook') {
             setCurrentTab('schemas')
         }
-    }, [showSyncsTab, showWebhookTab, currentTab, setCurrentTab])
+        if (!showProjectionTab && currentTab === 'projection') {
+            setCurrentTab('schemas')
+        }
+    }, [showProjectionTab, showSyncsTab, showWebhookTab, currentTab, setCurrentTab])
 
     const tabs: LemonTab<DataWarehouseSourceSceneTab>[] = [
         {
@@ -256,6 +262,14 @@ function ManagedSourceTabs({
             label: 'Syncs',
             key: 'syncs',
             content: <Syncs id={sourceId} tabId={tabId} availableSources={availableSources ?? {}} />,
+        })
+    }
+
+    if (showProjectionTab) {
+        tabs.splice(1, 0, {
+            label: 'Projection',
+            key: 'projection',
+            content: <ProjectionTab id={sourceId} tabId={tabId} />,
         })
     }
 

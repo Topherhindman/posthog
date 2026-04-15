@@ -797,6 +797,8 @@ class Database(BaseModel):
 
         from products.data_warehouse.backend.models import DataWarehouseJoin, DataWarehouseSavedQuery
 
+        is_direct_query = connection_id is not None
+
         with timings.measure("team"):
             if team_id is None and team is None:
                 raise ValueError("Either team_id or team must be provided")
@@ -815,31 +817,33 @@ class Database(BaseModel):
             span.set_attribute("team_id", team.pk)
 
         with timings.measure("feature_flags"):
-            is_managed_viewset_enabled = posthoganalytics.feature_enabled(
-                "managed-viewsets",
-                str(team.uuid),
-                groups={
-                    "organization": str(team.organization_id),
-                    "project": str(team.id),
-                },
-                group_properties={
-                    "organization": {
-                        "id": str(team.organization_id),
+            is_managed_viewset_enabled = False
+            if not is_direct_query:
+                is_managed_viewset_enabled = posthoganalytics.feature_enabled(
+                    "managed-viewsets",
+                    str(team.uuid),
+                    groups={
+                        "organization": str(team.organization_id),
+                        "project": str(team.id),
                     },
-                    "project": {
-                        "id": str(team.id),
+                    group_properties={
+                        "organization": {
+                            "id": str(team.organization_id),
+                        },
+                        "project": {
+                            "id": str(team.id),
+                        },
                     },
-                },
-                send_feature_flag_events=False,
-            )
+                    send_feature_flag_events=False,
+                )
 
         with timings.measure("database"):
             database = Database(
                 timezone=team.timezone,
                 week_start_day=team.week_start_day,
-                include_posthog_tables=connection_id is None,
+                include_posthog_tables=not is_direct_query,
             )
-            if connection_id is not None:
+            if is_direct_query:
                 database._connection_id = connection_id
                 direct_source = (
                     ExternalDataSource.objects.filter(
@@ -854,7 +858,7 @@ class Database(BaseModel):
                     database._direct_connection_metadata = direct_source.connection_metadata
 
         with timings.measure("filter_system_tables_for_user"):
-            if team is not None:
+            if not is_direct_query and team is not None:
                 is_hogql_access_control_enabled = posthoganalytics.feature_enabled(
                     "hogql-access-control",
                     str(team.uuid),
@@ -988,10 +992,7 @@ class Database(BaseModel):
 
         with timings.measure("data_warehouse_saved_query"):
             if database._is_direct_query():
-                queryset = DataWarehouseSavedQuery.objects.filter(team_id=team.pk).exclude(deleted=True)
-                if not is_managed_viewset_enabled:
-                    queryset = queryset.filter(managed_viewset__isnull=True)
-                view_names = set(queryset.values_list("name", flat=True))
+                view_names = set()
             else:
                 with timings.measure("select"):
                     queryset = (
@@ -1072,11 +1073,16 @@ class Database(BaseModel):
                     return self.parent_table.to_printed_clickhouse(context)
 
             with timings.measure("select"):
-                tables: list[DataWarehouseTable] = list(
-                    DataWarehouseTable.raw_objects.filter(team_id=team.pk)
-                    .exclude(deleted=True)
-                    .select_related("credential", "external_data_source")
-                )
+                queryset = DataWarehouseTable.raw_objects.filter(team_id=team.pk).exclude(deleted=True)
+                if database._is_direct_query():
+                    queryset = queryset.filter(
+                        external_data_source_id=database._connection_id,
+                        external_data_source__access_method=ExternalDataSource.AccessMethod.DIRECT,
+                    ).select_related("external_data_source")
+                else:
+                    queryset = queryset.select_related("credential", "external_data_source")
+
+                tables: list[DataWarehouseTable] = list(queryset)
                 _preload_active_external_data_schemas(tables)
                 if database._is_direct_query():
                     tables = [
