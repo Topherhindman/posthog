@@ -1,12 +1,20 @@
 import type { ApiClient } from '@/api/client'
 import { ErrorCode } from '@/lib/errors'
 import { sanitizeHeaderValue } from '@/lib/utils'
+import type { Schemas } from '@/api/generated'
 import type { ApiUser } from '@/schema/api'
 import type { State } from '@/tools/types'
 
 import type { ScopedCache } from './cache/ScopedCache'
 
 const AI_CONSENT_TTL_MS = 4 * 60 * 60 * 1000 // 4 hours
+
+export type ResolvedProjectContext = {
+    organizationId?: string
+    projectId: string
+    projectUuid?: string
+    projectName?: string
+}
 
 export class StateManager {
     private _cache: ScopedCache<State>
@@ -87,6 +95,53 @@ export class StateManager {
         return _distinctId
     }
 
+    private async _fetchProject(projectId: string): Promise<Schemas.ProjectBackwardCompat> {
+        const projectResult = await this._api.projects().get({ projectId })
+        if (!projectResult.success) {
+            throw new Error(`Failed to get project: ${projectResult.error.message}`)
+        }
+        return projectResult.data
+    }
+
+    private async _cacheProject(project: Schemas.ProjectBackwardCompat): Promise<ResolvedProjectContext> {
+        const projectId = String(project.id)
+        await this._cache.set('projectId', projectId)
+        await this._cache.set('projectUuid', project.uuid)
+        await this._cache.set('orgId', project.organization)
+
+        return {
+            organizationId: project.organization,
+            projectId,
+            projectUuid: project.uuid,
+            ...(project.name ? { projectName: project.name } : {}),
+        }
+    }
+
+    private async _getProjectForOrganization(
+        orgId: string,
+        preferredProjectId?: string | undefined
+    ): Promise<Schemas.ProjectBackwardCompat> {
+        const projectsResult = await this._api.organizations().projects({ orgId }).list()
+
+        if (!projectsResult.success) {
+            throw projectsResult.error
+        }
+
+        if (projectsResult.data.length === 0) {
+            throw new Error('API key does not have access to any projects')
+        }
+
+        const fallbackProjectId =
+            preferredProjectId ??
+            ((await this.getUser()).team.organization === orgId ? String((await this.getUser()).team.id) : undefined)
+
+        return (
+            projectsResult.data.find(
+                (project: Schemas.ProjectBackwardCompat) => String(project.id) === fallbackProjectId
+            ) ?? projectsResult.data[0]!
+        )
+    }
+
     private async _getDefaultOrganizationAndProject(): Promise<{
         organizationId?: string
         projectId: number
@@ -147,6 +202,14 @@ export class StateManager {
         const orgId = await this._cache.get('orgId')
 
         if (!orgId) {
+            const cachedProjectId = await this._cache.get('projectId')
+            if (cachedProjectId) {
+                const project = await this._fetchProject(cachedProjectId)
+                await this._cache.set('projectUuid', project.uuid)
+                await this._cache.set('orgId', project.organization)
+                return project.organization
+            }
+
             const { organizationId } = await this.setDefaultOrganizationAndProject()
 
             return organizationId
@@ -159,11 +222,71 @@ export class StateManager {
         const projectId = await this._cache.get('projectId')
 
         if (!projectId) {
+            const cachedOrgId = await this._cache.get('orgId')
+            if (cachedOrgId) {
+                const project = await this._getProjectForOrganization(cachedOrgId)
+                const resolved = await this._cacheProject(project)
+                return resolved.projectId
+            }
+
             const { projectId } = await this.setDefaultOrganizationAndProject()
             return projectId.toString()
         }
 
         return projectId
+    }
+
+    async getResolvedProjectContext(): Promise<ResolvedProjectContext> {
+        const projectId = await this.getProjectId()
+        let organizationId = await this._cache.get('orgId')
+        const cachedProjectUuid = await this._cache.get('projectUuid')
+
+        if (organizationId && cachedProjectUuid) {
+            return {
+                organizationId,
+                projectId,
+                projectUuid: cachedProjectUuid,
+            }
+        }
+
+        const project = await this._fetchProject(projectId)
+        organizationId = organizationId ?? project.organization
+        await this._cache.set('orgId', organizationId)
+        await this._cache.set('projectUuid', project.uuid)
+
+        return {
+            organizationId,
+            projectId,
+            projectUuid: project.uuid,
+            ...(project.name ? { projectName: project.name } : {}),
+        }
+    }
+
+    async switchToProject(projectId: string | number): Promise<ResolvedProjectContext> {
+        const previousOrgId = await this._cache.get('orgId')
+        const project = await this._fetchProject(String(projectId))
+        const resolved = await this._cacheProject(project)
+
+        if (previousOrgId !== resolved.organizationId) {
+            await this.invalidateAiConsent()
+        }
+
+        return resolved
+    }
+
+    async switchToOrganization(orgId: string): Promise<ResolvedProjectContext> {
+        const previousOrgId = await this._cache.get('orgId')
+        const preferredProjectId = await this._cache.get('projectId')
+        const project = await this._getProjectForOrganization(orgId, preferredProjectId)
+
+        await this._cache.set('orgId', orgId)
+        const resolved = await this._cacheProject(project)
+
+        if (previousOrgId !== orgId) {
+            await this.invalidateAiConsent()
+        }
+
+        return resolved
     }
 
     async invalidateAiConsent(): Promise<void> {

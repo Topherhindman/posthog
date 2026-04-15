@@ -5,7 +5,14 @@ import { McpAgent } from 'agents/mcp'
 import type { z } from 'zod'
 
 import { ApiClient, type GroupType } from '@/api/client'
-import { AnalyticsEvent, getPostHogClient, isFeatureFlagEnabled } from '@/lib/analytics'
+import {
+    AnalyticsEvent,
+    buildMCPAnalyticsGroups,
+    buildMCPGroupProperties,
+    getPostHogClient,
+    isFeatureFlagEnabled,
+    type MCPAnalyticsContext,
+} from '@/lib/analytics'
 import { DurableObjectCache } from '@/lib/cache/DurableObjectCache'
 import {
     CUSTOM_API_BASE_URL,
@@ -19,7 +26,7 @@ import { buildInstructionsV2 } from '@/lib/instructions'
 import { initMcpCatObservability } from '@/lib/mcpcat'
 import { formatResponse } from '@/lib/response'
 import { SessionManager } from '@/lib/SessionManager'
-import { StateManager } from '@/lib/StateManager'
+import { StateManager, type ResolvedProjectContext } from '@/lib/StateManager'
 import { sanitizeHeaderValue } from '@/lib/utils'
 import { registerPrompts } from '@/prompts'
 import { registerResources } from '@/resources'
@@ -54,6 +61,7 @@ export class MCP extends McpAgent<Env> {
 
     initialState: State = {
         projectId: undefined,
+        projectUuid: undefined,
         orgId: undefined,
         distinctId: undefined,
         region: undefined,
@@ -209,7 +217,11 @@ export class MCP extends McpAgent<Env> {
         return _distinctId
     }
 
-    async trackEvent(event: AnalyticsEvent, properties: Record<string, any> = {}): Promise<void> {
+    async trackEvent(
+        event: AnalyticsEvent,
+        properties: Record<string, any> = {},
+        options?: { context?: MCPAnalyticsContext }
+    ): Promise<void> {
         try {
             const distinctId = await this.getDistinctId()
 
@@ -219,9 +231,21 @@ export class MCP extends McpAgent<Env> {
 
             const clientName = await this.cache.get('clientName')
 
+            const contextProperties = options?.context
+                ? {
+                      ...(options.context.organizationId ? { organization_id: options.context.organizationId } : {}),
+                      ...(options.context.projectId ? { project_id: options.context.projectId } : {}),
+                      ...(options.context.projectUuid ? { project_uuid: options.context.projectUuid } : {}),
+                      ...(options.context.projectName ? { project_name: options.context.projectName } : {}),
+                  }
+                : {}
+            const groups = options?.context ? buildMCPAnalyticsGroups(options.context) : {}
+            const groupProperties = options?.context ? buildMCPGroupProperties(options.context) : {}
+
             client.capture({
                 distinctId,
                 event,
+                ...(Object.keys(groups).length > 0 ? { groups } : {}),
                 properties: {
                     ...(this.requestProperties.sessionId
                         ? {
@@ -233,11 +257,63 @@ export class MCP extends McpAgent<Env> {
                     ...(this._mcpClientVersion ? { mcp_client_version: this._mcpClientVersion } : {}),
                     ...(this._mcpProtocolVersion ? { mcp_protocol_version: this._mcpProtocolVersion } : {}),
                     ...(this.requestProperties.transport ? { mcp_transport: this.requestProperties.transport } : {}),
+                    ...contextProperties,
                     ...properties,
                 },
             })
+
+            for (const [groupType, groupKey] of Object.entries(groups)) {
+                const properties = groupProperties[groupType]
+                if (properties && Object.keys(properties).length > 0) {
+                    client.groupIdentify({ groupType, groupKey, properties })
+                }
+            }
         } catch {
             // skip
+        }
+    }
+
+    private async getResolvedAnalyticsContext(context: Context): Promise<ResolvedProjectContext | undefined> {
+        try {
+            return await context.stateManager.getResolvedProjectContext()
+        } catch {
+            return undefined
+        }
+    }
+
+    private async trackContextSwitchEvent(
+        toolName: string,
+        context: Context,
+        previousContext: ResolvedProjectContext | undefined
+    ): Promise<void> {
+        const resolvedContext = await this.getResolvedAnalyticsContext(context)
+        if (!resolvedContext) {
+            return
+        }
+
+        if (toolName === 'switch-project') {
+            await this.trackEvent(
+                AnalyticsEvent.MCP_PROJECT_SWITCHED,
+                {
+                    previous_organization_id: previousContext?.organizationId,
+                    previous_project_id: previousContext?.projectId,
+                    previous_project_uuid: previousContext?.projectUuid,
+                },
+                { context: resolvedContext }
+            )
+            return
+        }
+
+        if (toolName === 'switch-organization') {
+            await this.trackEvent(
+                AnalyticsEvent.MCP_ORGANIZATION_SWITCHED,
+                {
+                    previous_organization_id: previousContext?.organizationId,
+                    previous_project_id: previousContext?.projectId,
+                    previous_project_uuid: previousContext?.projectUuid,
+                },
+                { context: resolvedContext }
+            )
         }
     }
 
@@ -262,7 +338,16 @@ export class MCP extends McpAgent<Env> {
             }
 
             try {
+                const previousContext =
+                    tool.name === 'switch-project' || tool.name === 'switch-organization'
+                        ? await this.getResolvedAnalyticsContext(await this.getContext())
+                        : undefined
                 const result = await handler(params)
+                if (tool.name === 'switch-project' || tool.name === 'switch-organization') {
+                    this.ctx.waitUntil(
+                        this.trackContextSwitchEvent(tool.name, await this.getContext(), previousContext)
+                    )
+                }
 
                 // For tools with UI resources, include structuredContent for better UI rendering
                 // structuredContent is not added to model context, only used by UI apps
@@ -374,6 +459,7 @@ export class MCP extends McpAgent<Env> {
         }
 
         const context = await this.getContext()
+        const resolvedContext = await this.getResolvedAnalyticsContext(context)
 
         // Register prompts and resources
         await registerPrompts(this.server)
@@ -423,14 +509,18 @@ export class MCP extends McpAgent<Env> {
             : undefined
 
         this.ctx.waitUntil(
-            this.trackEvent(AnalyticsEvent.MCP_INIT, {
-                tool_count: allTools.length,
-                mcp_version: version,
-                has_organization_id: !!organizationId,
-                has_project_id: !!projectId,
-                read_only: !!readOnly,
-                ...(initDurationMs !== undefined ? { init_duration_ms: initDurationMs } : {}),
-            })
+            this.trackEvent(
+                AnalyticsEvent.MCP_INIT,
+                {
+                    tool_count: allTools.length,
+                    mcp_version: version,
+                    has_organization_id: !!organizationId,
+                    has_project_id: !!projectId,
+                    read_only: !!readOnly,
+                    ...(initDurationMs !== undefined ? { init_duration_ms: initDurationMs } : {}),
+                },
+                resolvedContext ? { context: resolvedContext } : undefined
+            )
         )
     }
 

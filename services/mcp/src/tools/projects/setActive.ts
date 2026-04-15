@@ -15,7 +15,7 @@ export const setActiveHandler: ToolBase<typeof schema, Result>['handler'] = asyn
 ) => {
     const { projectId } = params
 
-    await context.cache.set('projectId', projectId.toString())
+    await context.stateManager.switchToProject(projectId)
 
     return {
         content: [{ type: 'text', text: `Switched to project ${projectId}` }],

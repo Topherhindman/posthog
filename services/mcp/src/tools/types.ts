@@ -15,6 +15,7 @@ export type SessionState = {
 
 export type State = {
     projectId: string | undefined
+    projectUuid: string | undefined
     orgId: string | undefined
     distinctId: string | undefined
     region: CloudRegion | undefined

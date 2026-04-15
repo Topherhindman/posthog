@@ -6,6 +6,23 @@ import { StateManager } from '@/lib/StateManager'
 import type { ApiRedactedPersonalApiKey, ApiUser } from '@/schema/api'
 import type { State } from '@/tools/types'
 
+const createProject = (overrides: Record<string, unknown> = {}): any =>
+    ({
+        id: 456,
+        organization: 'org-1',
+        name: 'Test project',
+        created_at: '2026-01-01T00:00:00.000Z',
+        effective_membership_level: null,
+        has_group_types: false,
+        group_types: [],
+        live_events_token: null,
+        updated_at: '2026-01-01T00:00:00.000Z',
+        uuid: 'project-uuid-456',
+        api_token: 'phc_test',
+        ingested_event: false,
+        ...overrides,
+    }) as any
+
 describe('StateManager', () => {
     let stateManager: StateManager
     let cache: MemoryCache<State>
@@ -235,6 +252,18 @@ describe('StateManager', () => {
             expect(result).toBe('default-org')
             expect(spy).toHaveBeenCalledOnce()
         })
+
+        it('should backfill org and project UUID from cached project', async () => {
+            await cache.set('projectId', '456')
+            const fetchProjectSpy = vi.spyOn(stateManager as any, '_fetchProject').mockResolvedValue(createProject())
+
+            const result = await stateManager.getOrgID()
+
+            expect(result).toBe('org-1')
+            expect(fetchProjectSpy).toHaveBeenCalledWith('456')
+            expect(await cache.get('orgId')).toBe('org-1')
+            expect(await cache.get('projectUuid')).toBe('project-uuid-456')
+        })
     })
 
     describe('getProjectId', () => {
@@ -256,6 +285,141 @@ describe('StateManager', () => {
 
             expect(result).toBe('789')
             expect(spy).toHaveBeenCalledOnce()
+        })
+
+        it('should resolve and cache a project from the active organization', async () => {
+            await cache.set('orgId', 'org-1')
+            vi.spyOn(stateManager, 'getUser').mockResolvedValue(mockUser)
+
+            ;(stateManager as any)._api = {
+                organizations: () => ({
+                    projects: () => ({
+                        list: vi.fn().mockResolvedValue({
+                            success: true,
+                            data: [
+                                createProject({ id: 123, uuid: 'project-uuid-123' }),
+                                createProject({ id: 456, uuid: 'project-uuid-456' }),
+                            ],
+                        }),
+                    }),
+                }),
+            }
+
+            const result = await stateManager.getProjectId()
+
+            expect(result).toBe('456')
+            expect(await cache.get('projectId')).toBe('456')
+            expect(await cache.get('projectUuid')).toBe('project-uuid-456')
+        })
+    })
+
+    describe('getResolvedProjectContext', () => {
+        it('should use cached org and project UUID when available', async () => {
+            await cache.set('orgId', 'org-1')
+            await cache.set('projectId', '456')
+            await cache.set('projectUuid', 'project-uuid-456')
+            const fetchProjectSpy = vi.spyOn(stateManager as any, '_fetchProject')
+
+            const result = await stateManager.getResolvedProjectContext()
+
+            expect(result).toEqual({
+                organizationId: 'org-1',
+                projectId: '456',
+                projectUuid: 'project-uuid-456',
+            })
+            expect(fetchProjectSpy).not.toHaveBeenCalled()
+        })
+
+        it('should fetch project details when project UUID is missing', async () => {
+            await cache.set('orgId', 'org-1')
+            await cache.set('projectId', '456')
+            vi.spyOn(stateManager as any, '_fetchProject').mockResolvedValue(createProject())
+
+            const result = await stateManager.getResolvedProjectContext()
+
+            expect(result).toEqual({
+                organizationId: 'org-1',
+                projectId: '456',
+                projectUuid: 'project-uuid-456',
+                projectName: 'Test project',
+            })
+        })
+    })
+
+    describe('switchToProject', () => {
+        it('should cache project, UUID, and invalidate consent when org changes', async () => {
+            await cache.set('orgId', 'org-1')
+            await cache.set('aiConsentGiven', true)
+            await cache.set('aiConsentFetchedAt', 123)
+            vi.spyOn(stateManager as any, '_fetchProject').mockResolvedValue(
+                createProject({
+                    id: 789,
+                    organization: 'org-2',
+                    name: 'Org 2 project',
+                    uuid: 'project-uuid-789',
+                })
+            )
+            const invalidateSpy = vi.spyOn(stateManager, 'invalidateAiConsent')
+
+            const result = await stateManager.switchToProject('789')
+
+            expect(result).toEqual({
+                organizationId: 'org-2',
+                projectId: '789',
+                projectUuid: 'project-uuid-789',
+                projectName: 'Org 2 project',
+            })
+            expect(invalidateSpy).toHaveBeenCalledOnce()
+            expect(await cache.get('orgId')).toBe('org-2')
+            expect(await cache.get('projectId')).toBe('789')
+            expect(await cache.get('projectUuid')).toBe('project-uuid-789')
+            expect(await cache.get('aiConsentGiven')).toBeUndefined()
+            expect(await cache.get('aiConsentFetchedAt')).toBeUndefined()
+        })
+    })
+
+    describe('switchToOrganization', () => {
+        it('should keep the preferred project when it exists in the target org', async () => {
+            await cache.set('orgId', 'org-1')
+            await cache.set('projectId', '222')
+
+            ;(stateManager as any)._api = {
+                organizations: () => ({
+                    projects: () => ({
+                        list: vi.fn().mockResolvedValue({
+                            success: true,
+                            data: [
+                                createProject({
+                                    id: 222,
+                                    organization: 'org-2',
+                                    name: 'Preferred project',
+                                    uuid: 'project-uuid-222',
+                                }),
+                                createProject({
+                                    id: 333,
+                                    organization: 'org-2',
+                                    name: 'Fallback project',
+                                    uuid: 'project-uuid-333',
+                                }),
+                            ],
+                        }),
+                    }),
+                }),
+            }
+            const invalidateSpy = vi.spyOn(stateManager, 'invalidateAiConsent')
+
+            const result = await stateManager.switchToOrganization('org-2')
+
+            expect(result).toEqual({
+                organizationId: 'org-2',
+                projectId: '222',
+                projectUuid: 'project-uuid-222',
+                projectName: 'Preferred project',
+            })
+            expect(invalidateSpy).toHaveBeenCalledOnce()
+            expect(await cache.get('orgId')).toBe('org-2')
+            expect(await cache.get('projectId')).toBe('222')
+            expect(await cache.get('projectUuid')).toBe('project-uuid-222')
         })
     })
 })
