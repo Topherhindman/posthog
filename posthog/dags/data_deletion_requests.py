@@ -8,6 +8,7 @@ import dagster
 import pydantic
 from clickhouse_driver import Client
 
+from posthog.clickhouse.adhoc_events_deletion import ADHOC_EVENTS_DELETION_TABLE
 from posthog.clickhouse.cluster import (
     AlterTableMutationRunner,
     ClickhouseCluster,
@@ -15,7 +16,14 @@ from posthog.clickhouse.cluster import (
     Query,
 )
 from posthog.dags.common import JobOwners
-from posthog.models.data_deletion_request import DataDeletionRequest, RequestStatus, RequestType, jsonhas_expr
+from posthog.dags.deletes import deletes_job
+from posthog.models.data_deletion_request import (
+    DataDeletionRequest,
+    ExecutionMode,
+    RequestStatus,
+    RequestType,
+    jsonhas_expr,
+)
 from posthog.models.event.sql import EVENTS_DATA_TABLE
 
 from ee.clickhouse.materialized_columns.columns import MaterializedColumnDetails
@@ -35,6 +43,7 @@ class DeletionRequestContext:
     end_time: datetime
     events: list[str]
     properties: list[str] = field(default_factory=list)
+    execution_mode: str = ExecutionMode.IMMEDIATE.value
 
 
 # ---------------------------------------------------------------------------
@@ -68,6 +77,20 @@ def _base_params(ctx: DeletionRequestContext) -> dict:
         "end_time": ctx.end_time,
         "events": ctx.events,
         **_property_filter_params(ctx.properties),
+    }
+
+
+EVENT_REMOVAL_PREDICATE = (
+    "team_id = %(team_id)s AND timestamp >= %(start_time)s AND timestamp < %(end_time)s AND event IN %(events)s"
+)
+
+
+def _event_removal_params(request: DataDeletionRequest) -> dict:
+    return {
+        "team_id": request.team_id,
+        "start_time": request.start_time,
+        "end_time": request.end_time,
+        "events": request.events,
     }
 
 
@@ -161,7 +184,8 @@ def load_deletion_request(
     context.log.info(
         f"Processing deletion request {request.pk}: "
         f"team_id={request.team_id}, events={request.events}, "
-        f"time_range={request.start_time} to {request.end_time}"
+        f"time_range={request.start_time} to {request.end_time}, "
+        f"execution_mode={request.execution_mode}"
     )
     context.add_output_metadata(
         {
@@ -169,6 +193,7 @@ def load_deletion_request(
             "events": dagster.MetadataValue.text(", ".join(request.events)),
             "start_time": dagster.MetadataValue.text(str(request.start_time)),
             "end_time": dagster.MetadataValue.text(str(request.end_time)),
+            "execution_mode": dagster.MetadataValue.text(request.execution_mode),
         }
     )
 
@@ -178,21 +203,21 @@ def load_deletion_request(
         start_time=request.start_time,
         end_time=request.end_time,
         events=request.events,
+        execution_mode=request.execution_mode,
     )
 
 
-@dagster.op(tags=OWNER_TAG)
-def execute_event_deletion(
+def _run_immediate_event_deletion(
     context: dagster.OpExecutionContext,
-    cluster: dagster.ResourceParam[ClickhouseCluster],
+    cluster: ClickhouseCluster,
     deletion_request: DeletionRequestContext,
-) -> DeletionRequestContext:
+) -> None:
     """Execute lightweight deletes on each shard serially."""
     table = EVENTS_DATA_TABLE()
     shards = sorted(cluster.shards)
     total_shards = len(shards)
 
-    context.log.info(f"Starting event deletion across {total_shards} shards on table {table}")
+    context.log.info(f"Starting immediate event deletion across {total_shards} shards on table {table}")
 
     for idx, shard_num in enumerate(shards, 1):
         context.log.info(f"Processing shard {shard_num} ({idx}/{total_shards})")
@@ -200,12 +225,7 @@ def execute_event_deletion(
 
         runner = LightweightDeleteMutationRunner(
             table=table,
-            predicate=(
-                "team_id = %(team_id)s "
-                "AND timestamp >= %(start_time)s "
-                "AND timestamp < %(end_time)s "
-                "AND event IN %(events)s"
-            ),
+            predicate=EVENT_REMOVAL_PREDICATE,
             parameters={
                 "team_id": deletion_request.team_id,
                 "start_time": deletion_request.start_time,
@@ -224,11 +244,83 @@ def execute_event_deletion(
 
     context.add_output_metadata(
         {
+            "mode": dagster.MetadataValue.text("immediate"),
             "shards_processed": dagster.MetadataValue.int(total_shards),
             "table": dagster.MetadataValue.text(table),
         }
     )
 
+
+def _queue_events_for_deferred_deletion(
+    context: dagster.OpExecutionContext,
+    cluster: ClickhouseCluster,
+    deletion_request: DeletionRequestContext,
+) -> None:
+    """Populate adhoc_events_deletion with (team_id, uuid) pairs for matching events.
+
+    The scheduled ``deletes_job`` pipeline drains this table and runs the actual
+    lightweight delete, amortizing the mutation cost alongside other batched deletes.
+    """
+    source_table = EVENTS_DATA_TABLE()
+    db = django_settings.CLICKHOUSE_DATABASE
+    shards = sorted(cluster.shards)
+    params = {
+        "team_id": deletion_request.team_id,
+        "start_time": deletion_request.start_time,
+        "end_time": deletion_request.end_time,
+        "events": deletion_request.events,
+    }
+    # nosemgrep: clickhouse-fstring-param-audit (db, source_table, ADHOC_EVENTS_DELETION_TABLE are internal; EVENT_REMOVAL_PREDICATE is a module-level constant)
+    insert_sql = (
+        f"INSERT INTO {db}.{ADHOC_EVENTS_DELETION_TABLE} (team_id, uuid) "
+        f"SELECT team_id, uuid FROM {db}.{source_table} WHERE {EVENT_REMOVAL_PREDICATE}"
+    )
+
+    def run_on_shard(client: Client) -> int:
+        client.execute(insert_sql, params, settings={"max_execution_time": 1800})
+        row = client.execute(
+            f"SELECT count() FROM {db}.{ADHOC_EVENTS_DELETION_TABLE} "
+            f"WHERE team_id = %(team_id)s AND is_deleted = 0"
+            " AND (team_id, uuid) IN ("
+            f"SELECT team_id, uuid FROM {db}.{source_table} WHERE {EVENT_REMOVAL_PREDICATE}"
+            ")",
+            params,
+        )
+        return row[0][0] if row else 0
+
+    total_queued = 0
+    for idx, shard_num in enumerate(shards, 1):
+        context.log.info(f"Queueing shard {shard_num} ({idx}/{len(shards)}) into {ADHOC_EVENTS_DELETION_TABLE}")
+        shard_start = time.monotonic()
+
+        shard_result = cluster.map_any_host_in_shards({shard_num: run_on_shard}).result()
+        _host, queued = next(iter(shard_result.items()))
+        total_queued += queued
+
+        elapsed = time.monotonic() - shard_start
+        context.log.info(f"Shard {shard_num}: queued ~{queued} rows in {elapsed:.1f}s")
+
+    context.add_output_metadata(
+        {
+            "mode": dagster.MetadataValue.text("deferred"),
+            "shards_processed": dagster.MetadataValue.int(len(shards)),
+            "queued_rows": dagster.MetadataValue.int(total_queued),
+            "table": dagster.MetadataValue.text(ADHOC_EVENTS_DELETION_TABLE),
+        }
+    )
+
+
+@dagster.op(tags=OWNER_TAG)
+def execute_event_deletion(
+    context: dagster.OpExecutionContext,
+    cluster: dagster.ResourceParam[ClickhouseCluster],
+    deletion_request: DeletionRequestContext,
+) -> DeletionRequestContext:
+    """Dispatch event deletion based on execution_mode: immediate mutation or defer via adhoc_events_deletion."""
+    if deletion_request.execution_mode == ExecutionMode.DEFERRED.value:
+        _queue_events_for_deferred_deletion(context, cluster, deletion_request)
+    else:
+        _run_immediate_event_deletion(context, cluster, deletion_request)
     return deletion_request
 
 
@@ -451,19 +543,30 @@ def cleanup_temp_tables(
 
 
 @dagster.op(tags=OWNER_TAG)
-def mark_deletion_complete(
+def finalize_deletion_request(
     context: dagster.OpExecutionContext,
     deletion_request: DeletionRequestContext,
 ) -> None:
-    """Mark the deletion request as completed."""
+    """Transition the deletion request out of IN_PROGRESS.
+
+    Immediate mode: the mutation already ran, transition directly to COMPLETED.
+    Deferred mode: events are queued in adhoc_events_deletion; transition to
+    QUEUED so the verify_queued_deletion_requests sensor can promote to
+    COMPLETED once the deletes_job drains the queue.
+    """
     from django.utils import timezone
+
+    if deletion_request.execution_mode == ExecutionMode.DEFERRED.value:
+        next_status = RequestStatus.QUEUED
+    else:
+        next_status = RequestStatus.COMPLETED
 
     DataDeletionRequest.objects.filter(
         pk=deletion_request.request_id,
         status=RequestStatus.IN_PROGRESS,
-    ).update(status=RequestStatus.COMPLETED, updated_at=timezone.now())
+    ).update(status=next_status, updated_at=timezone.now())
 
-    context.log.info(f"Deletion request {deletion_request.request_id} marked as completed.")
+    context.log.info(f"Deletion request {deletion_request.request_id} marked as {next_status.value}.")
 
 
 @dagster.failure_hook()
@@ -517,10 +620,15 @@ def mark_deletion_failed(context: dagster.HookContext) -> None:
 
 @dagster.job(tags=OWNER_TAG, hooks={mark_deletion_failed})
 def data_deletion_request_event_removal():
-    """Execute an approved event deletion request by running lightweight deletes shard by shard."""
+    """Execute an approved event deletion request.
+
+    Immediate mode runs a lightweight delete mutation shard by shard.
+    Deferred mode queues event UUIDs into adhoc_events_deletion for the
+    scheduled deletes_job to drain later.
+    """
     request = load_deletion_request()
     result = execute_event_deletion(request)
-    mark_deletion_complete(result)
+    finalize_deletion_request(result)
 
 
 @dagster.job(tags=OWNER_TAG, hooks={mark_deletion_failed})
@@ -530,4 +638,83 @@ def data_deletion_request_property_removal():
     request = prepare_and_insert_modified_events(request)
     request = delete_original_events(request)
     request = cleanup_temp_tables(request)
-    mark_deletion_complete(request)
+    finalize_deletion_request(request)
+
+
+# ---------------------------------------------------------------------------
+# Verifier sensor for deferred deletions
+# ---------------------------------------------------------------------------
+
+
+def _count_remaining_matching_events(request: DataDeletionRequest) -> int:
+    """Count events in sharded_events that still match a deletion request's predicate.
+
+    Used by the verifier sensor to decide when a QUEUED deferred request has
+    been fully drained by the deletes_job. Uses the distributed ``events`` table
+    and excludes lightweight-deleted rows via ``_row_exists = 1``.
+    """
+    from posthog.clickhouse.client import sync_execute
+    from posthog.clickhouse.client.connection import ClickHouseUser
+    from posthog.clickhouse.query_tagging import Feature, Product, tags_context
+    from posthog.clickhouse.workload import Workload
+
+    params = _event_removal_params(request)
+    with tags_context(
+        product=Product.INTERNAL,
+        feature=Feature.DATA_DELETION,
+        team_id=request.team_id,
+        workload=Workload.OFFLINE,
+        query_type="data_deletion_request_verify_queued",
+    ):
+        # nosemgrep: clickhouse-fstring-param-audit (EVENT_REMOVAL_PREDICATE is a module-level constant, not user input)
+        result = sync_execute(
+            f"SELECT count() FROM events WHERE {EVENT_REMOVAL_PREDICATE} AND _row_exists = 1",
+            params,
+            team_id=request.team_id,
+            readonly=True,
+            workload=Workload.OFFLINE,
+            ch_user=ClickHouseUser.META,
+        )
+    return int(result[0][0]) if result else 0
+
+
+@dagster.run_status_sensor(
+    run_status=dagster.DagsterRunStatus.SUCCESS,
+    monitored_jobs=[deletes_job],
+    default_status=dagster.DefaultSensorStatus.STOPPED,
+    minimum_interval_seconds=60,
+)
+def verify_queued_deletion_requests(context: dagster.RunStatusSensorContext):
+    """Promote QUEUED deletion requests to COMPLETED once their events are gone.
+
+    Fires after each deletes_job SUCCESS. For every QUEUED DataDeletionRequest
+    we count rows in ``sharded_events`` that still match the original predicate;
+    when the count is zero the drain has finished and we transition the request
+    to COMPLETED. If the count is non-zero we leave the request in QUEUED and
+    let the next deletes_job cycle try again.
+    """
+    from django.utils import timezone
+
+    queued = DataDeletionRequest.objects.filter(status=RequestStatus.QUEUED)
+    promoted = 0
+    for request in queued:
+        try:
+            remaining = _count_remaining_matching_events(request)
+        except Exception as exc:
+            context.log.warning(f"Could not verify deletion request {request.pk}: {exc}")
+            continue
+
+        if remaining > 0:
+            context.log.info(
+                f"Deletion request {request.pk}: {remaining} matching events remain, keeping status QUEUED."
+            )
+            continue
+
+        updated = DataDeletionRequest.objects.filter(pk=request.pk, status=RequestStatus.QUEUED).update(
+            status=RequestStatus.COMPLETED, updated_at=timezone.now()
+        )
+        if updated:
+            promoted += 1
+            context.log.info(f"Deletion request {request.pk} promoted QUEUED → COMPLETED.")
+
+    context.log.info(f"verify_queued_deletion_requests: {promoted} request(s) promoted this cycle.")

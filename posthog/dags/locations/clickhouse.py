@@ -62,6 +62,7 @@ defs = dagster.Definitions(
     ],
     sensors=[
         deletes.run_deletes_after_squash,
+        data_deletion_requests.verify_queued_deletion_requests,
     ],
     resources=resources,
 )

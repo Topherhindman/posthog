@@ -26,8 +26,14 @@ class RequestStatus(models.TextChoices):
     PENDING = "pending"
     APPROVED = "approved"
     IN_PROGRESS = "in_progress"
+    QUEUED = "queued"
     COMPLETED = "completed"
     FAILED = "failed"
+
+
+class ExecutionMode(models.TextChoices):
+    IMMEDIATE = "immediate"
+    DEFERRED = "deferred"
 
 
 class DataDeletionRequest(UUIDModel):
@@ -102,6 +108,15 @@ class DataDeletionRequest(UUIDModel):
         related_name="data_deletion_requests_approved",
     )
     approved_at = models.DateTimeField(null=True, blank=True)
+    execution_mode = models.CharField(
+        max_length=20,
+        choices=ExecutionMode.choices,
+        default=ExecutionMode.IMMEDIATE,
+        help_text="Picked by ClickHouse Team at approval time. "
+        "Immediate: run a dedicated delete mutation now. "
+        "Deferred: queue event UUIDs into adhoc_events_deletion so the "
+        "scheduled deletes_job drains them. Only honored for event_removal.",
+    )
 
     class Meta:
         ordering = ["-created_at"]
