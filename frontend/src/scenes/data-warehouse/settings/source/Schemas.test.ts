@@ -14,6 +14,7 @@ const makeSchema = (name: string): ExternalDataSourceSchema => ({
     incremental_field: null,
     incremental_field_type: null,
     sync_frequency: '6hour',
+    primary_key_columns: null,
 })
 
 describe('Schemas', () => {

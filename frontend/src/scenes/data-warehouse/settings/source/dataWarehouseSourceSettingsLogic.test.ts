@@ -23,6 +23,7 @@ const makeSchema = (overrides: Partial<ExternalDataSourceSchema> = {}): External
     incremental_field_type: null,
     sync_frequency: '6hour',
     ...overrides,
+    primary_key_columns: overrides.primary_key_columns ?? null,
 })
 
 const makeSource = (schemas: ExternalDataSourceSchema[]): ExternalDataSource =>

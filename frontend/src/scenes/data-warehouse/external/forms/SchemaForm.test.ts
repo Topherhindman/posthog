@@ -19,6 +19,9 @@ const makeSchema = (table: string): ExternalDataSourceSyncSchema => ({
     append_available: false,
     supports_webhooks: false,
     should_sync_default: true,
+    primary_key_columns: null,
+    available_columns: [],
+    detected_primary_keys: null,
 })
 
 describe('SchemaForm', () => {

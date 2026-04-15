@@ -407,9 +407,7 @@ export default function SchemaForm(): JSX.Element {
                                                 )
                                             }
 
-                                            return (
-                                                <span className="text-xs text-muted-foreground">None detected</span>
-                                            )
+                                            return <span className="text-xs text-muted-foreground">None detected</span>
                                         }
 
                                         return (
