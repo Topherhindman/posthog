@@ -26,7 +26,7 @@ import { InsightPickerEndpointModal } from './InsightPickerEndpointModal'
 import { OverlayForNewEndpointMenu } from './newEndpointMenu'
 
 const ENDPOINTS_PRODUCT_DESCRIPTION =
-    'Create reusable SQL queries and expose them as API endpoints. Query your data programmatically from any application. Note: Endpoints is in beta - features and APIs may change.'
+    'Create reusable SQL queries and expose them as API endpoints. Query your data programmatically from any application.'
 const ENDPOINTS_USAGE_PRODUCT_DESCRIPTION =
     'Monitor endpoint execution metrics including bytes read, CPU usage, and query duration. Compare materialized vs inline executions.'
 
@@ -93,17 +93,6 @@ export function EndpointsScene({ tabId }: { tabId?: string }): JSX.Element {
                                 </AppShortcut>
                             }
                         />
-                        <LemonBanner
-                            type="warning"
-                            dismissKey="endpoints-beta-banner"
-                            action={{ children: 'Send feedback', id: 'endpoints-feedback-button' }}
-                        >
-                            <p>
-                                Endpoints is in beta and it may not be fully reliable. We are actively working on it and
-                                it may change while we work with you on what works best. Please let us know what you'd
-                                like to see here and/or report any issues directly to us!
-                            </p>
-                        </LemonBanner>
                         <LemonBanner
                             type="success"
                             dismissKey="endpoints-docs-upgrade-banner"
