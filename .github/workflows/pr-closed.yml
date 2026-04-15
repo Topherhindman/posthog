@@ -84,7 +84,7 @@ jobs:
                   echo "$pr_title_escaped" >> $GITHUB_ENV
                   echo "EOF" >> $GITHUB_ENV
             - name: Capture PR age to PostHog
-              uses: PostHog/posthog-github-action@eea1405eeb2d1d2259f0ee0b44d7b152869e6840 # v1.1.1
+              uses: PostHog/posthog-github-action@96cde325d52a179848c107d1504f4f2ff295882a # v1.1.1-node24
               with:
                   posthog-token: ${{secrets.POSTHOG_API_TOKEN}}
                   event: 'posthog-ci-pr-stats'

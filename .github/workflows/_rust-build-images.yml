@@ -171,7 +171,7 @@ jobs:
 
             - name: Report failure
               if: failure() && github.event_name != 'pull_request'
-              uses: PostHog/posthog-github-action@8c42e50f2c52e002eabb9bee3f69b152ee8fc1dd # v1.0.1
+              uses: PostHog/posthog-github-action@96cde325d52a179848c107d1504f4f2ff295882a # v1.1.1-node24
               with:
                   posthog-token: ${{ secrets.POSTHOG_API_TOKEN }}
                   event: ${{ inputs.event-name }}
