@@ -90,9 +90,18 @@ def prepare_ast_for_printing(
         with context.timings.measure("load_restricted_properties"):
             from products.platform_features.backend.property_access_control import get_restricted_properties_for_team
 
+            # If context.user is None (common when query runners don't explicitly pass
+            # user= to execute_hogql_query), fall back to the ContextVar set by
+            # QueryRunner.calculate().
+            effective_user = context.user
+            if effective_user is None:
+                from posthog.hogql_queries.query_runner import current_query_user
+
+                effective_user = current_query_user.get(None)
+
             context.restricted_properties = get_restricted_properties_for_team(
                 team_id=context.team_id,
-                user=context.user,
+                user=effective_user,
             )
 
     if context.modifiers.inCohortVia == InCohortVia.LEFTJOIN_CONJOINED:
