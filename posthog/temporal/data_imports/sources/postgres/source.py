@@ -196,14 +196,19 @@ class PostgresSource(SimpleSource[PostgresSourceConfig], SSHTunnelMixin, Validat
             # quirk on `information_schema` (rare but possible) only disables CDC
             # advertising for this listing instead of breaking schema discovery for
             # everyone — including non-CDC users.
+            pk_columns_by_table: dict[str, list[str]] = {}
             try:
                 table_names_by_schema: dict[str, list[str]] = {}
+                table_names_by_source_location: dict[tuple[str, str], str] = {}
                 for discovered_schema in db_schemas.values():
                     table_names_by_schema.setdefault(discovered_schema.source_schema, []).append(
                         discovered_schema.source_table_name
                     )
+                for table_name, discovered_schema in db_schemas.items():
+                    table_names_by_source_location[
+                        (discovered_schema.source_schema, discovered_schema.source_table_name)
+                    ] = table_name
 
-                tables_with_pks: set[str] = set()
                 with pg_connection(
                     host=host,
                     port=port,
@@ -215,20 +220,16 @@ class PostgresSource(SimpleSource[PostgresSourceConfig], SSHTunnelMixin, Validat
                         if not source_table_names:
                             continue
 
-                        source_table_names_with_pks = set(
-                            get_primary_key_columns(conn, source_schema, source_table_names).keys()
-                        )
-                        if not source_table_names_with_pks:
-                            continue
+                        source_pk_columns_by_table = get_primary_key_columns(conn, source_schema, source_table_names)
+                        for source_table_name, pk_columns in source_pk_columns_by_table.items():
+                            display_name = table_names_by_source_location.get((source_schema, source_table_name))
+                            if display_name is not None:
+                                pk_columns_by_table[display_name] = pk_columns
 
-                        for table_name, discovered_schema in db_schemas.items():
-                            if (
-                                discovered_schema.source_schema == source_schema
-                                and discovered_schema.source_table_name in source_table_names_with_pks
-                            ):
-                                tables_with_pks.add(table_name)
+                tables_with_pks = set(pk_columns_by_table.keys())
             except Exception as e:
                 capture_exception(e)
+                pk_columns_by_table = {}
                 tables_with_pks = set()
 
         for table_name, discovered_schema in db_schemas.items():
@@ -257,6 +258,8 @@ class PostgresSource(SimpleSource[PostgresSourceConfig], SSHTunnelMixin, Validat
                     source_catalog=discovered_schema.source_catalog,
                     source_schema=discovered_schema.source_schema,
                     source_table_name=discovered_schema.source_table_name,
+                    detected_primary_keys=pk_columns_by_table.get(table_name)
+                    or (["id"] if any(col[0] == "id" for col in discovered_schema.columns) else None),
                 )
             )
 
@@ -355,4 +358,5 @@ class PostgresSource(SimpleSource[PostgresSourceConfig], SSHTunnelMixin, Validat
             chunk_size_override=schema.chunk_size_override,
             team_id=inputs.team_id,
             require_ssl=require_ssl,
+            is_initial_sync=not schema.initial_sync_complete,
         )

@@ -858,6 +858,7 @@ class TestExternalDataSource(APIBaseTest):
                     "sync_frequency": sync_frequency_interval_to_sync_frequency(schema.sync_frequency_interval),
                     "sync_time_of_day": schema.sync_time_of_day,
                     "description": schema.description,
+                    "primary_key_columns": None,
                     "cdc_table_mode": "consolidated",
                 }
             ],
@@ -2059,6 +2060,10 @@ class TestExternalDataSource(APIBaseTest):
                     "incremental_field": "id",
                     "sync_type": None,
                     "supports_webhooks": False,
+                    "available_columns": [
+                        {"field": "id", "label": "id", "type": "integer", "nullable": True},
+                    ],
+                    "detected_primary_keys": ["id"],
                 }
             ]
 
@@ -2112,6 +2117,10 @@ class TestExternalDataSource(APIBaseTest):
                     "incremental_field": "id",
                     "sync_type": None,
                     "supports_webhooks": False,
+                    "available_columns": [
+                        {"field": "id", "label": "id", "type": "integer", "nullable": True},
+                    ],
+                    "detected_primary_keys": ["id"],
                 }
             ]
 
