@@ -1,3 +1,4 @@
+import json
 import uuid
 
 import pytest
@@ -10,6 +11,45 @@ import httpx
 
 from products.mcp_store.backend.models import MCPServerInstallation, MCPServerInstallationTool
 from products.mcp_store.backend.tools import ToolsFetchError, fetch_upstream_tools, sync_installation_tools
+
+
+def _build_response(
+    *, status: int = 200, body: str = "", content_type: str = "application/json", session_id: str | None = None
+) -> MagicMock:
+    """Build a MagicMock that looks enough like an httpx.Response for our code.
+
+    Our parser reads ``status_code``, ``text``, and ``headers`` — so we set those
+    explicitly rather than relying on MagicMock auto-spec.
+    """
+    response = MagicMock()
+    response.status_code = status
+    response.text = body
+    headers: dict[str, str] = {"content-type": content_type}
+    if session_id is not None:
+        headers["mcp-session-id"] = session_id
+    response.headers = headers
+    return response
+
+
+def _install_handshake_mock(
+    mock_client_cls: MagicMock, *, tools_list_response: MagicMock, session_id: str = "sess-1"
+) -> MagicMock:
+    """Wire up the httpx.Client mock for the full MCP handshake.
+
+    Returns the client mock so tests can assert against call order / arguments.
+    The handshake is: POST initialize → POST notifications/initialized → POST
+    tools/list → DELETE. Tests parameterize the tools/list response.
+    """
+    initialize_body = json.dumps({"jsonrpc": "2.0", "id": 1, "result": {"protocolVersion": "2024-11-05"}})
+    initialize_resp = _build_response(body=initialize_body, session_id=session_id)
+    notify_resp = _build_response(status=202, body="")
+
+    client = MagicMock()
+    # Three POSTs in order: initialize, notifications/initialized, tools/list.
+    client.post.side_effect = [initialize_resp, notify_resp, tools_list_response]
+    client.delete.return_value = _build_response(status=200, body="")
+    mock_client_cls.return_value.__enter__.return_value = client
+    return client
 
 
 class TestFetchUpstreamTools(ClickhouseTestMixin, APIBaseTest):
@@ -29,27 +69,75 @@ class TestFetchUpstreamTools(ClickhouseTestMixin, APIBaseTest):
     @patch("products.mcp_store.backend.tools.httpx.Client")
     def test_fetch_upstream_tools_parses_result(self, mock_client_cls, _allow):
         installation = self._installation()
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {
-            "jsonrpc": "2.0",
-            "id": 1,
-            "result": {
-                "tools": [
-                    {"name": "alpha", "description": "A", "inputSchema": {"type": "object"}},
-                    {"name": "beta", "title": "Beta!", "description": "B"},
-                    {"description": "no name"},  # invalid — dropped
-                ]
-            },
-        }
-        client = MagicMock()
-        client.post.return_value = mock_response
-        mock_client_cls.return_value.__enter__.return_value = client
+        tools_body = json.dumps(
+            {
+                "jsonrpc": "2.0",
+                "id": 2,
+                "result": {
+                    "tools": [
+                        {"name": "alpha", "description": "A", "inputSchema": {"type": "object"}},
+                        {"name": "beta", "title": "Beta!", "description": "B"},
+                        {"description": "no name"},  # invalid — dropped
+                    ]
+                },
+            }
+        )
+        client = _install_handshake_mock(mock_client_cls, tools_list_response=_build_response(body=tools_body))
 
         tools = fetch_upstream_tools(installation)
         assert [t["name"] for t in tools] == ["alpha", "beta"]
-        _, kwargs = client.post.call_args
-        assert kwargs["headers"]["Authorization"] == "Bearer sk-test"
+
+        # Verify the handshake order and that the session id rode along on later calls.
+        assert client.post.call_count == 3
+        init_call, notify_call, list_call = client.post.call_args_list
+        assert json.loads(init_call.kwargs["content"])["method"] == "initialize"
+        assert "Mcp-Session-Id" not in init_call.kwargs["headers"]
+        assert json.loads(notify_call.kwargs["content"])["method"] == "notifications/initialized"
+        assert notify_call.kwargs["headers"]["Mcp-Session-Id"] == "sess-1"
+        assert json.loads(list_call.kwargs["content"])["method"] == "tools/list"
+        assert list_call.kwargs["headers"]["Authorization"] == "Bearer sk-test"
+        assert list_call.kwargs["headers"]["Mcp-Session-Id"] == "sess-1"
+        # DELETE cleans up the session afterwards.
+        assert client.delete.called
+        assert client.delete.call_args.kwargs["headers"]["Mcp-Session-Id"] == "sess-1"
+
+    @patch("products.mcp_store.backend.tools.is_url_allowed", return_value=(True, None))
+    @patch("products.mcp_store.backend.tools.httpx.Client")
+    def test_fetch_upstream_tools_parses_sse_tools_list(self, mock_client_cls, _allow):
+        # Some MCP servers reply to tools/list over SSE even though initialize
+        # came back as JSON. Make sure we still extract the tool array.
+        installation = self._installation()
+        sse_body = 'event: message\ndata: {"jsonrpc":"2.0","id":2,"result":{"tools":[{"name":"alpha"}]}}\n\n'
+        _install_handshake_mock(
+            mock_client_cls,
+            tools_list_response=_build_response(body=sse_body, content_type="text/event-stream"),
+        )
+
+        tools = fetch_upstream_tools(installation)
+        assert [t["name"] for t in tools] == ["alpha"]
+
+    @patch("products.mcp_store.backend.tools.is_url_allowed", return_value=(True, None))
+    @patch("products.mcp_store.backend.tools.httpx.Client")
+    def test_fetch_upstream_tools_works_without_session_id(self, mock_client_cls, _allow):
+        # Servers that don't require a session simply omit Mcp-Session-Id on the
+        # initialize response. We should still complete the handshake and not
+        # send DELETE (nothing to terminate).
+        installation = self._installation()
+        tools_body = json.dumps({"jsonrpc": "2.0", "id": 2, "result": {"tools": [{"name": "alpha"}]}})
+        client = _install_handshake_mock(
+            mock_client_cls,
+            tools_list_response=_build_response(body=tools_body),
+            session_id=None,  # no session id returned
+        )
+        # _install_handshake_mock still queues an initialize with a session id;
+        # overwrite that so this case is accurate.
+        init_resp = _build_response(body=json.dumps({"jsonrpc": "2.0", "id": 1, "result": {}}))
+        notify_resp = _build_response(status=202, body="")
+        client.post.side_effect = [init_resp, notify_resp, _build_response(body=tools_body)]
+
+        tools = fetch_upstream_tools(installation)
+        assert [t["name"] for t in tools] == ["alpha"]
+        assert not client.delete.called
 
     @patch("products.mcp_store.backend.tools.is_url_allowed", return_value=(False, "Private IP"))
     def test_fetch_upstream_tools_raises_on_blocked_url(self, _allow):
@@ -70,14 +158,21 @@ class TestFetchUpstreamTools(ClickhouseTestMixin, APIBaseTest):
 
     @patch("products.mcp_store.backend.tools.is_url_allowed", return_value=(True, None))
     @patch("products.mcp_store.backend.tools.httpx.Client")
+    def test_fetch_upstream_tools_raises_on_initialize_error(self, mock_client_cls, _allow):
+        installation = self._installation()
+        client = MagicMock()
+        client.post.return_value = _build_response(status=401, body="Unauthorized")
+        mock_client_cls.return_value.__enter__.return_value = client
+
+        with pytest.raises(ToolsFetchError, match="initialize returned status 401"):
+            fetch_upstream_tools(installation)
+
+    @patch("products.mcp_store.backend.tools.is_url_allowed", return_value=(True, None))
+    @patch("products.mcp_store.backend.tools.httpx.Client")
     def test_fetch_upstream_tools_raises_when_result_missing(self, mock_client_cls, _allow):
         installation = self._installation()
-        mock_response = MagicMock()
-        mock_response.status_code = 200
-        mock_response.json.return_value = {"jsonrpc": "2.0", "id": 1, "result": {}}
-        client = MagicMock()
-        client.post.return_value = mock_response
-        mock_client_cls.return_value.__enter__.return_value = client
+        tools_body = json.dumps({"jsonrpc": "2.0", "id": 2, "result": {}})
+        _install_handshake_mock(mock_client_cls, tools_list_response=_build_response(body=tools_body))
 
         with pytest.raises(ToolsFetchError, match="missing 'result.tools'"):
             fetch_upstream_tools(installation)
