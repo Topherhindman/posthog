@@ -11,13 +11,20 @@ from posthog.settings import SERVER_GATEWAY_INTERFACE
 
 from ee.hogai.utils.asgi import SyncIterableToAsync
 
-from .models import MCPServerInstallation
+from .models import MCPServerInstallation, MCPServerInstallationTool
 from .oauth import TokenRefreshError, is_token_expiring, refresh_installation_token
 
 logger = structlog.get_logger(__name__)
 
 UPSTREAM_TIMEOUT = 180
 MAX_PROXY_BODY_SIZE = 1_048_576  # 1 MB
+
+# JSON-RPC error codes used by per-tool approval enforcement. -32001 is in the
+# implementation-defined server-error range (-32000..-32099); we deliberately
+# use distinct codes so clients can tell "needs approval" apart from "disabled".
+TOOL_NEEDS_APPROVAL_CODE = -32001
+TOOL_DISABLED_CODE = -32002
+METHOD_NOT_FOUND_CODE = -32601
 
 
 def build_upstream_auth_headers(installation: MCPServerInstallation) -> dict[str, str]:
@@ -104,6 +111,111 @@ def validate_installation_auth(installation: MCPServerInstallation) -> tuple[boo
     return True, None
 
 
+def _jsonrpc_error(request_id: Any, code: int, message: str) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+
+
+def _evaluate_tool_call(installation: MCPServerInstallation, item: dict[str, Any]) -> dict[str, Any] | None:
+    """Check a single JSON-RPC item against the installation's tool approval state.
+
+    Returns a JSON-RPC error object to send back (short-circuiting the upstream
+    call), or ``None`` to let the call pass through.
+    """
+    if not isinstance(item, dict):
+        return None
+    if item.get("method") != "tools/call":
+        return None
+
+    params = item.get("params") or {}
+    tool_name = params.get("name") if isinstance(params, dict) else None
+    request_id = item.get("id")
+
+    if not tool_name or not isinstance(tool_name, str):
+        return _jsonrpc_error(request_id, METHOD_NOT_FOUND_CODE, "tools/call missing 'name' parameter")
+
+    try:
+        tool = MCPServerInstallationTool.objects.get(installation=installation, tool_name=tool_name)
+    except MCPServerInstallationTool.DoesNotExist:
+        return _jsonrpc_error(
+            request_id,
+            METHOD_NOT_FOUND_CODE,
+            f"Tool '{tool_name}' is not registered for this installation",
+        )
+
+    if tool.removed_at is not None:
+        return _jsonrpc_error(
+            request_id,
+            METHOD_NOT_FOUND_CODE,
+            f"Tool '{tool_name}' is no longer available on the upstream server",
+        )
+
+    if tool.approval_state == "approved":
+        return None
+    if tool.approval_state == "needs_approval":
+        return _jsonrpc_error(
+            request_id,
+            TOOL_NEEDS_APPROVAL_CODE,
+            f"Tool '{tool_name}' requires approval before it can be called",
+        )
+    if tool.approval_state == "do_not_use":
+        return _jsonrpc_error(
+            request_id,
+            TOOL_DISABLED_CODE,
+            f"Tool '{tool_name}' has been disabled by the user",
+        )
+    return None
+
+
+def enforce_tool_approval(
+    installation: MCPServerInstallation,
+    data: dict[str, Any] | list[Any],
+) -> HttpResponse | None:
+    """Inspect a JSON-RPC body and short-circuit tools/call that isn't approved.
+
+    Returns an HttpResponse when at least one tool call is blocked, or None to
+    pass the request through unchanged. Non-tools/call methods are always
+    passed through; unknown tool names return a JSON-RPC method-not-found error
+    without hitting the upstream server.
+    """
+    if isinstance(data, list):
+        responses: list[dict[str, Any]] = []
+        any_blocked = False
+        any_passthrough = False
+        for item in data:
+            blocked = _evaluate_tool_call(installation, item)
+            if blocked is not None:
+                responses.append(blocked)
+                any_blocked = True
+            else:
+                any_passthrough = True
+        # Mixed batches (some blocked, some passthrough) can't be safely split
+        # without reshuffling responses. Reject the whole batch so clients retry
+        # individual calls — this matches the spec's guidance to keep batches atomic.
+        if any_blocked and any_passthrough:
+            return HttpResponse(
+                json.dumps(
+                    [
+                        _jsonrpc_error(
+                            (item.get("id") if isinstance(item, dict) else None),
+                            TOOL_NEEDS_APPROVAL_CODE,
+                            "Batch contains tool calls that require approval; send them individually",
+                        )
+                        for item in data
+                    ]
+                ),
+                content_type="application/json",
+                status=200,
+            )
+        if any_blocked:
+            return HttpResponse(json.dumps(responses), content_type="application/json", status=200)
+        return None
+
+    blocked = _evaluate_tool_call(installation, data) if isinstance(data, dict) else None
+    if blocked is None:
+        return None
+    return HttpResponse(json.dumps(blocked), content_type="application/json", status=200)
+
+
 def proxy_mcp_request(request: Any, installation: MCPServerInstallation) -> HttpResponse | StreamingHttpResponse:
     allowed, error = is_url_allowed(installation.url)
     if not allowed:
@@ -122,6 +234,9 @@ def proxy_mcp_request(request: Any, installation: MCPServerInstallation) -> Http
             content_type="application/json",
             status=400,
         )
+
+    if enforcement_response := enforce_tool_approval(installation, data):
+        return enforcement_response
 
     body = json.dumps(data).encode()
 
