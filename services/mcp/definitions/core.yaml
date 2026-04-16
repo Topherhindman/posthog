@@ -119,24 +119,6 @@ tools:
     rotate-secret-token-partial-update:
         operation: rotate_secret_token_partial_update
         enabled: false
-    roles-list:
-        operation: roles_list
-        enabled: false
-    roles-create:
-        operation: roles_create
-        enabled: false
-    roles-retrieve:
-        operation: roles_retrieve
-        enabled: false
-    roles-update:
-        operation: roles_update
-        enabled: false
-    roles-partial-update:
-        operation: roles_partial_update
-        enabled: false
-    roles-destroy:
-        operation: roles_destroy
-        enabled: false
     annotations-list:
         operation: annotations_list
         enabled: false
@@ -440,24 +422,6 @@ tools:
     session-recordings-sharing-refresh-create:
         operation: session_recordings_sharing_refresh_create
         enabled: false
-    subscriptions-list:
-        operation: subscriptions_list
-        enabled: false
-    subscriptions-create:
-        operation: subscriptions_create
-        enabled: false
-    subscriptions-retrieve:
-        operation: subscriptions_retrieve
-        enabled: false
-    subscriptions-update:
-        operation: subscriptions_update
-        enabled: false
-    subscriptions-partial-update:
-        operation: subscriptions_partial_update
-        enabled: false
-    subscriptions-destroy:
-        operation: subscriptions_destroy
-        enabled: false
     users-list:
         operation: users_list
         enabled: false
@@ -538,9 +502,6 @@ tools:
         enabled: false
     dashboards-generate-metadata-create:
         operation: dashboards_generate_metadata_create
-        enabled: false
-    subscriptions-test-delivery-create:
-        operation: subscriptions_test_delivery_create
         enabled: false
     users-github-login-retrieve:
         operation: users_github_login_retrieve

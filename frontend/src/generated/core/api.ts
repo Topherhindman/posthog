@@ -31,7 +31,6 @@ import type {
     PaginatedOrganizationOAuthApplicationListApi,
     PaginatedProjectBackwardCompatBasicListApi,
     PaginatedProjectSecretAPIKeyListApi,
-    PaginatedSubscriptionListApi,
     PaginatedUserListApi,
     PatchedDashboardTemplateApi,
     PatchedEnterprisePropertyDefinitionApi,
@@ -39,15 +38,12 @@ import type {
     PatchedOrganizationDomainApi,
     PatchedProjectBackwardCompatApi,
     PatchedProjectSecretAPIKeyApi,
-    PatchedSubscriptionApi,
     PatchedUserApi,
     ProjectBackwardCompatApi,
     ProjectSecretAPIKeyApi,
     ProjectSecretApiKeysListParams,
     PropertyDefinitionsListParams,
     SharingConfigurationApi,
-    SubscriptionApi,
-    SubscriptionsListParams,
     UserApi,
     UsersListParams,
 } from './api.schemas'
@@ -1426,130 +1422,6 @@ export const sessionRecordingsSharingRefreshCreate = async (
         method: 'POST',
         headers: { 'Content-Type': 'application/json', ...options?.headers },
         body: JSON.stringify(sharingConfigurationApi),
-    })
-}
-
-export const getSubscriptionsListUrl = (projectId: string, params?: SubscriptionsListParams) => {
-    const normalizedParams = new URLSearchParams()
-
-    Object.entries(params || {}).forEach(([key, value]) => {
-        if (value !== undefined) {
-            normalizedParams.append(key, value === null ? 'null' : value.toString())
-        }
-    })
-
-    const stringifiedParams = normalizedParams.toString()
-
-    return stringifiedParams.length > 0
-        ? `/api/projects/${projectId}/subscriptions/?${stringifiedParams}`
-        : `/api/projects/${projectId}/subscriptions/`
-}
-
-export const subscriptionsList = async (
-    projectId: string,
-    params?: SubscriptionsListParams,
-    options?: RequestInit
-): Promise<PaginatedSubscriptionListApi> => {
-    return apiMutator<PaginatedSubscriptionListApi>(getSubscriptionsListUrl(projectId, params), {
-        ...options,
-        method: 'GET',
-    })
-}
-
-export const getSubscriptionsCreateUrl = (projectId: string) => {
-    return `/api/projects/${projectId}/subscriptions/`
-}
-
-export const subscriptionsCreate = async (
-    projectId: string,
-    subscriptionApi: NonReadonly<SubscriptionApi>,
-    options?: RequestInit
-): Promise<SubscriptionApi> => {
-    return apiMutator<SubscriptionApi>(getSubscriptionsCreateUrl(projectId), {
-        ...options,
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', ...options?.headers },
-        body: JSON.stringify(subscriptionApi),
-    })
-}
-
-export const getSubscriptionsRetrieveUrl = (projectId: string, id: number) => {
-    return `/api/projects/${projectId}/subscriptions/${id}/`
-}
-
-export const subscriptionsRetrieve = async (
-    projectId: string,
-    id: number,
-    options?: RequestInit
-): Promise<SubscriptionApi> => {
-    return apiMutator<SubscriptionApi>(getSubscriptionsRetrieveUrl(projectId, id), {
-        ...options,
-        method: 'GET',
-    })
-}
-
-export const getSubscriptionsUpdateUrl = (projectId: string, id: number) => {
-    return `/api/projects/${projectId}/subscriptions/${id}/`
-}
-
-export const subscriptionsUpdate = async (
-    projectId: string,
-    id: number,
-    subscriptionApi: NonReadonly<SubscriptionApi>,
-    options?: RequestInit
-): Promise<SubscriptionApi> => {
-    return apiMutator<SubscriptionApi>(getSubscriptionsUpdateUrl(projectId, id), {
-        ...options,
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json', ...options?.headers },
-        body: JSON.stringify(subscriptionApi),
-    })
-}
-
-export const getSubscriptionsPartialUpdateUrl = (projectId: string, id: number) => {
-    return `/api/projects/${projectId}/subscriptions/${id}/`
-}
-
-export const subscriptionsPartialUpdate = async (
-    projectId: string,
-    id: number,
-    patchedSubscriptionApi: NonReadonly<PatchedSubscriptionApi>,
-    options?: RequestInit
-): Promise<SubscriptionApi> => {
-    return apiMutator<SubscriptionApi>(getSubscriptionsPartialUpdateUrl(projectId, id), {
-        ...options,
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json', ...options?.headers },
-        body: JSON.stringify(patchedSubscriptionApi),
-    })
-}
-
-/**
- * Hard delete of this model is not allowed. Use a patch API call to set "deleted" to true
- */
-export const getSubscriptionsDestroyUrl = (projectId: string, id: number) => {
-    return `/api/projects/${projectId}/subscriptions/${id}/`
-}
-
-export const subscriptionsDestroy = async (projectId: string, id: number, options?: RequestInit): Promise<unknown> => {
-    return apiMutator<unknown>(getSubscriptionsDestroyUrl(projectId, id), {
-        ...options,
-        method: 'DELETE',
-    })
-}
-
-export const getSubscriptionsTestDeliveryCreateUrl = (projectId: string, id: number) => {
-    return `/api/projects/${projectId}/subscriptions/${id}/test-delivery/`
-}
-
-export const subscriptionsTestDeliveryCreate = async (
-    projectId: string,
-    id: number,
-    options?: RequestInit
-): Promise<void> => {
-    return apiMutator<void>(getSubscriptionsTestDeliveryCreateUrl(projectId, id), {
-        ...options,
-        method: 'POST',
     })
 }
 

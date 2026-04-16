@@ -1935,51 +1935,6 @@
             "readOnlyHint": true
         }
     },
-    "roles-list": {
-        "description": "List all roles defined in the organization. Roles group members and can be used in approval policies and access control rules.",
-        "category": "Platform Features",
-        "feature": "platform_features",
-        "summary": "List organization roles.",
-        "title": "List organization roles.",
-        "required_scopes": ["organization:read"],
-        "new_mcp": true,
-        "annotations": {
-            "destructiveHint": false,
-            "idempotentHint": true,
-            "openWorldHint": true,
-            "readOnlyHint": true
-        }
-    },
-    "role-get": {
-        "description": "Get details of a specific role including its name, creation date, and creator.",
-        "category": "Platform Features",
-        "feature": "platform_features",
-        "summary": "Get a specific role.",
-        "title": "Get a specific role.",
-        "required_scopes": ["organization:read"],
-        "new_mcp": true,
-        "annotations": {
-            "destructiveHint": false,
-            "idempotentHint": true,
-            "openWorldHint": true,
-            "readOnlyHint": true
-        }
-    },
-    "role-members-list": {
-        "description": "List all members assigned to a specific role. Shows who has which role in the organization.",
-        "category": "Platform Features",
-        "feature": "platform_features",
-        "summary": "List members of a role.",
-        "title": "List members of a role.",
-        "required_scopes": ["organization:read"],
-        "new_mcp": true,
-        "annotations": {
-            "destructiveHint": false,
-            "idempotentHint": true,
-            "openWorldHint": true,
-            "readOnlyHint": true
-        }
-    },
     "prompt-list": {
         "description": "List all LLM prompts stored for the current team. Optionally filter by name. Returns paginated prompt summaries. By default, only prompt metadata is returned, not full prompt content.",
         "category": "Prompts",
