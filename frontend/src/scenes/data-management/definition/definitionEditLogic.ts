@@ -81,7 +81,7 @@ export const definitionEditLogic = kea<definitionEditLogicType>([
                         const currentTeamId = teamLogic.values.currentTeamId
                         if (currentTeamId) {
                             const facLogic = propertyAccessControlLogic({
-                                propertyDefinitionId: String(definition.id),
+                                propertyDefinitionId: definition.id,
                                 teamId: currentTeamId,
                             })
                             if (facLogic.values.hasChanges) {

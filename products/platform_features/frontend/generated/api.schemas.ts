@@ -596,6 +596,85 @@ export interface PatchedCommentApi {
     source_comment?: string | null
 }
 
+/**
+ * * `read_write` - read_write
+ * `read` - read
+ * `none` - none
+ */
+export type AccessLevelEnumApi = (typeof AccessLevelEnumApi)[keyof typeof AccessLevelEnumApi]
+
+export const AccessLevelEnumApi = {
+    ReadWrite: 'read_write',
+    Read: 'read',
+    None: 'none',
+} as const
+
+/**
+ * Serializer for individual property access control rules.
+ */
+export interface PropertyAccessControlApi {
+    readonly id: string
+    /** The access level for this rule.
+
+* `read_write` - read_write
+* `read` - read
+* `none` - none */
+    access_level: AccessLevelEnumApi
+    /** @nullable */
+    organization_member?: string | null
+    /** @nullable */
+    role?: string | null
+    /** @nullable */
+    readonly created_by: number | null
+    readonly created_at: string
+    readonly updated_at: string
+}
+
+/**
+ * Serializer for the full access control state of a property definition.
+ */
+export interface PropertyAccessControlResponseApi {
+    /** List of all access control rules for this property definition. */
+    access_controls: PropertyAccessControlApi[]
+    /** Available access levels that can be assigned. */
+    available_access_levels: string[]
+    /** The default access level when no rules match. */
+    default_access_level: string
+}
+
+export interface PaginatedPropertyAccessControlResponseListApi {
+    count: number
+    /** @nullable */
+    next?: string | null
+    /** @nullable */
+    previous?: string | null
+    results: PropertyAccessControlResponseApi[]
+}
+
+/**
+ * Serializer for creating or updating a property access control rule.
+ */
+export interface PropertyAccessControlUpdateApi {
+    /** The property definition ID this rule applies to. */
+    property_definition_id: string
+    /** The access level to set. Use null to delete an override.
+
+* `read_write` - read_write
+* `read` - read
+* `none` - none */
+    access_level: AccessLevelEnumApi | NullEnumApi | null
+    /**
+     * The organization member UUID to set an override for.
+     * @nullable
+     */
+    organization_member?: string | null
+    /**
+     * The role UUID to set an override for.
+     * @nullable
+     */
+    role?: string | null
+}
+
 export type ApprovalPoliciesListParams = {
     /**
      * Number of results to return per page.
@@ -995,4 +1074,19 @@ export type CommentsListParams = {
      * @minLength 1
      */
     source_comment?: string
+}
+
+export type PropertyAccessControlsListParams = {
+    /**
+     * Number of results to return per page.
+     */
+    limit?: number
+    /**
+     * The initial index from which to return the results.
+     */
+    offset?: number
+    /**
+     * The property definition ID to fetch access control rules for.
+     */
+    property_definition_id: string
 }

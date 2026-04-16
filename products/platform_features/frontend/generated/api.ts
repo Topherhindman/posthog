@@ -29,6 +29,7 @@ import type {
     PaginatedCommentListApi,
     PaginatedOrganizationListApi,
     PaginatedOrganizationMemberListApi,
+    PaginatedPropertyAccessControlResponseListApi,
     PaginatedRoleListApi,
     PaginatedRoleMembershipListApi,
     PatchedApprovalPolicyApi,
@@ -36,6 +37,9 @@ import type {
     PatchedOrganizationApi,
     PatchedOrganizationMemberApi,
     PatchedRoleApi,
+    PropertyAccessControlApi,
+    PropertyAccessControlUpdateApi,
+    PropertyAccessControlsListParams,
     RoleApi,
     RoleMembershipApi,
     RolesListParams,
@@ -851,5 +855,58 @@ export const commentsCountRetrieve = async (projectId: string, options?: Request
     return apiMutator<void>(getCommentsCountRetrieveUrl(projectId), {
         ...options,
         method: 'GET',
+    })
+}
+
+/**
+ * Get all property access control rules for a property definition.
+ */
+export const getPropertyAccessControlsListUrl = (projectId: string, params: PropertyAccessControlsListParams) => {
+    const normalizedParams = new URLSearchParams()
+
+    Object.entries(params || {}).forEach(([key, value]) => {
+        if (value !== undefined) {
+            normalizedParams.append(key, value === null ? 'null' : value.toString())
+        }
+    })
+
+    const stringifiedParams = normalizedParams.toString()
+
+    return stringifiedParams.length > 0
+        ? `/api/projects/${projectId}/property_access_controls/?${stringifiedParams}`
+        : `/api/projects/${projectId}/property_access_controls/`
+}
+
+export const propertyAccessControlsList = async (
+    projectId: string,
+    params: PropertyAccessControlsListParams,
+    options?: RequestInit
+): Promise<PaginatedPropertyAccessControlResponseListApi> => {
+    return apiMutator<PaginatedPropertyAccessControlResponseListApi>(
+        getPropertyAccessControlsListUrl(projectId, params),
+        {
+            ...options,
+            method: 'GET',
+        }
+    )
+}
+
+/**
+ * Create or update a property access control rule. Send access_level=null to delete an override.
+ */
+export const getPropertyAccessControlsCreateUrl = (projectId: string) => {
+    return `/api/projects/${projectId}/property_access_controls/`
+}
+
+export const propertyAccessControlsCreate = async (
+    projectId: string,
+    propertyAccessControlUpdateApi: PropertyAccessControlUpdateApi,
+    options?: RequestInit
+): Promise<PropertyAccessControlApi> => {
+    return apiMutator<PropertyAccessControlApi>(getPropertyAccessControlsCreateUrl(projectId), {
+        ...options,
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', ...options?.headers },
+        body: JSON.stringify(propertyAccessControlUpdateApi),
     })
 }

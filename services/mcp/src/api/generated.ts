@@ -31,6 +31,20 @@ export namespace Schemas {
     } as const;
 
     /**
+     * * `read_write` - read_write
+    * `read` - read
+    * `none` - none
+     */
+    export type AccessLevelEnum = typeof AccessLevelEnum[keyof typeof AccessLevelEnum];
+
+
+    export const AccessLevelEnum = {
+      ReadWrite: 'read_write',
+      Read: 'read',
+      None: 'none',
+    } as const;
+
+    /**
      * * `warehouse` - warehouse
     * `direct` - direct
      */
@@ -21663,6 +21677,48 @@ export namespace Schemas {
       results: ProjectSecretAPIKey[];
     }
 
+    /**
+     * Serializer for individual property access control rules.
+     */
+    export interface PropertyAccessControl {
+      readonly id: string;
+      /** The access level for this rule.
+
+    * `read_write` - read_write
+    * `read` - read
+    * `none` - none */
+      access_level: AccessLevelEnum;
+      /** @nullable */
+      organization_member?: string | null;
+      /** @nullable */
+      role?: string | null;
+      /** @nullable */
+      readonly created_by: number | null;
+      readonly created_at: string;
+      readonly updated_at: string;
+    }
+
+    /**
+     * Serializer for the full access control state of a property definition.
+     */
+    export interface PropertyAccessControlResponse {
+      /** List of all access control rules for this property definition. */
+      access_controls: PropertyAccessControl[];
+      /** Available access levels that can be assigned. */
+      available_access_levels: string[];
+      /** The default access level when no rules match. */
+      default_access_level: string;
+    }
+
+    export interface PaginatedPropertyAccessControlResponseList {
+      count: number;
+      /** @nullable */
+      next?: string | null;
+      /** @nullable */
+      previous?: string | null;
+      results: PropertyAccessControlResponse[];
+    }
+
     export interface QueryTabState {
       readonly id: string;
       /** 
@@ -28029,6 +28085,30 @@ export namespace Schemas {
     * `OR` - OR */
       type?: PropertyGroupOperator;
       values: PropertyItem[];
+    }
+
+    /**
+     * Serializer for creating or updating a property access control rule.
+     */
+    export interface PropertyAccessControlUpdate {
+      /** The property definition ID this rule applies to. */
+      property_definition_id: string;
+      /** The access level to set. Use null to delete an override.
+
+    * `read_write` - read_write
+    * `read` - read
+    * `none` - none */
+      access_level: AccessLevelEnum | NullEnum | null;
+      /**
+       * The organization member UUID to set an override for.
+       * @nullable
+       */
+      organization_member?: string | null;
+      /**
+       * The role UUID to set an override for.
+       * @nullable
+       */
+      role?: string | null;
     }
 
     export type PropertyType = typeof PropertyType[keyof typeof PropertyType];
@@ -37692,6 +37772,21 @@ export namespace Schemas {
      * The initial index from which to return the results.
      */
     offset?: number;
+    };
+
+    export type PropertyAccessControlsListParams = {
+    /**
+     * Number of results to return per page.
+     */
+    limit?: number;
+    /**
+     * The initial index from which to return the results.
+     */
+    offset?: number;
+    /**
+     * The property definition ID to fetch access control rules for.
+     */
+    property_definition_id: string;
     };
 
     export type PropertyDefinitionsListParams = {

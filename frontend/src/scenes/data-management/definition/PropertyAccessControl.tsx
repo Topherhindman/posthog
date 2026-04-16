@@ -1,8 +1,7 @@
 import { useActions, useValues } from 'kea'
-import { useState } from 'react'
 
 import { IconPlus } from '@posthog/icons'
-import { LemonButton, LemonDropdown, LemonSelect, LemonSelectOption } from '@posthog/lemon-ui'
+import { LemonButton, LemonDropdown, LemonSelect, LemonSelectOptionLeaf } from '@posthog/lemon-ui'
 
 import { RestrictionScope, useRestrictedArea } from 'lib/components/RestrictedArea'
 import { TeamMembershipLevel } from 'lib/constants'
@@ -13,13 +12,13 @@ import { Spinner } from 'lib/lemon-ui/Spinner'
 
 import { propertyAccessControlLogic, PropertyAccessControlLogicProps } from './propertyAccessControlLogic'
 
-const ACCESS_LEVEL_OPTIONS: LemonSelectOption<string>[] = [
+const ACCESS_LEVEL_OPTIONS: LemonSelectOptionLeaf<string>[] = [
     { value: 'read_write', label: 'Read & write' },
     { value: 'read', label: 'Read only' },
     { value: 'none', label: 'No access' },
 ]
 
-const OVERRIDE_OPTIONS: LemonSelectOption<string | null>[] = [
+const OVERRIDE_OPTIONS: LemonSelectOptionLeaf<string | null>[] = [
     ...ACCESS_LEVEL_OPTIONS,
     { value: null, label: 'Remove override' },
 ]
@@ -31,13 +30,11 @@ interface PropertyAccessControlProps {
 
 export function PropertyAccessControl({ propertyDefinitionId, teamId }: PropertyAccessControlProps): JSX.Element {
     const logicProps: PropertyAccessControlLogicProps = { propertyDefinitionId, teamId }
-    const { remoteStateLoading, defaultLevel, memberOverrides, roleOverrides, allMembers, allRoles } = useValues(
+    const { remoteStateLoading, defaultLevel, memberOverrides, roleOverrides, allMembers, allRoles, activeTab } =
+        useValues(propertyAccessControlLogic(logicProps))
+    const { setLocalDefaultLevel, setLocalMemberOverride, setLocalRoleOverride, setActiveTab } = useActions(
         propertyAccessControlLogic(logicProps)
     )
-    const { setLocalDefaultLevel, setLocalMemberOverride, setLocalRoleOverride } = useActions(
-        propertyAccessControlLogic(logicProps)
-    )
-    const [activeTab, setActiveTab] = useState<string>('members')
 
     const restrictedReason = useRestrictedArea({
         scope: RestrictionScope.Project,
@@ -120,7 +117,7 @@ function OverrideCell({
     onChange: (level: string | null) => void
     restrictedReason: string | null
 }): JSX.Element {
-    const hasOverride = currentLevel !== null && currentLevel !== undefined
+    const hasOverride = currentLevel != null
 
     if (hasOverride) {
         return (
@@ -179,7 +176,7 @@ function MembersTab({
     onSetOverride: (memberId: string, level: string | null) => void
     restrictedReason: string | null
 }): JSX.Element {
-    const columns: LemonTableColumn<MemberInfo, keyof MemberInfo>[] = [
+    const columns: LemonTableColumn<MemberInfo, keyof MemberInfo | undefined>[] = [
         {
             title: 'Member',
             key: 'name',
@@ -223,7 +220,7 @@ function RolesTab({
     onSetOverride: (roleId: string, level: string | null) => void
     restrictedReason: string | null
 }): JSX.Element {
-    const columns: LemonTableColumn<RoleInfo, keyof RoleInfo>[] = [
+    const columns: LemonTableColumn<RoleInfo, keyof RoleInfo | undefined>[] = [
         {
             title: 'Role',
             key: 'name',

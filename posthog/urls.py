@@ -215,7 +215,7 @@ urlpatterns = [
         include("products.mcp_analytics.backend.presentation.urls"),
     ),
     path(
-        "api/projects/<int:parent_lookup_team_id>/property_definitions/<str:property_definition_id>/property_access_controls/",
+        "api/projects/<int:parent_lookup_team_id>/property_access_controls/",
         include("products.platform_features.backend.presentation.urls"),
     ),
     opt_slash_path("api/support/ensure-zendesk-organization", csrf_exempt(ensure_zendesk_organization)),

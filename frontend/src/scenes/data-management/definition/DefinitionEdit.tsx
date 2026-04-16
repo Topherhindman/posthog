@@ -275,18 +275,15 @@ export function DefinitionEdit(props: DefinitionLogicProps): JSX.Element {
                 )}
 
                 {isProperty && editDefinition.id !== 'new' && currentTeamId && (
-                    <>
+                    <FlaggedFeature flag={FEATURE_FLAGS.PROPERTY_ACCESS_CONTROL}>
                         <SceneDivider />
                         <SceneSection
                             title="Access control"
                             description="Control who can view and modify this property."
                         >
-                            <PropertyAccessControl
-                                propertyDefinitionId={String(editDefinition.id)}
-                                teamId={currentTeamId}
-                            />
+                            <PropertyAccessControl propertyDefinitionId={editDefinition.id} teamId={currentTeamId} />
                         </SceneSection>
-                    </>
+                    </FlaggedFeature>
                 )}
             </SceneContent>
         </Form>

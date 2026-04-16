@@ -5,19 +5,21 @@ import api from 'lib/api'
 import { membersLogic } from 'scenes/organization/membersLogic'
 import { rolesLogic } from 'scenes/settings/organization/Permissions/Roles/rolesLogic'
 
+import type { propertyAccessControlLogicType } from './propertyAccessControlLogicType'
+
 export interface PropertyAccessControlLogicProps {
     propertyDefinitionId: string
     teamId: number
 }
 
-interface AccessControlRule {
+export interface AccessControlRule {
     id: string
     access_level: string
     organization_member: string | null
     role: string | null
 }
 
-interface AccessControlResponse {
+export interface AccessControlResponse {
     access_controls: AccessControlRule[]
     available_access_levels: string[]
     default_access_level: string
@@ -31,7 +33,7 @@ export interface LocalAccessControlState {
     roleOverrides: Record<string, string | null>
 }
 
-export const propertyAccessControlLogic = kea([
+export const propertyAccessControlLogic = kea<propertyAccessControlLogicType>([
     path(['scenes', 'data-management', 'definition', 'propertyAccessControlLogic']),
     props({} as PropertyAccessControlLogicProps),
     key((props) => props.propertyDefinitionId),
@@ -42,6 +44,7 @@ export const propertyAccessControlLogic = kea([
         setLocalRoleOverride: (roleId: string, level: string | null) => ({ roleId, level }),
         resetLocalState: true,
         saveAccessControls: true,
+        setActiveTab: (tab: string) => ({ tab }),
     }),
 
     loaders(({ props }) => ({
@@ -50,7 +53,9 @@ export const propertyAccessControlLogic = kea([
             {
                 loadRemoteState: async () => {
                     return await api.get<AccessControlResponse>(
-                        `api/projects/${props.teamId}/property_definitions/${props.propertyDefinitionId}/property_access_controls/`
+                        `api/projects/${props.teamId}/property_access_controls/?property_definition_id=${encodeURIComponent(
+                            props.propertyDefinitionId
+                        )}`
                     )
                 },
             },
@@ -69,9 +74,9 @@ export const propertyAccessControlLogic = kea([
                     const roleOverrides: Record<string, string | null> = {}
                     for (const rule of remoteState.access_controls) {
                         if (rule.organization_member) {
-                            memberOverrides[String(rule.organization_member)] = rule.access_level
+                            memberOverrides[rule.organization_member] = rule.access_level
                         } else if (rule.role) {
-                            roleOverrides[String(rule.role)] = rule.access_level
+                            roleOverrides[rule.role] = rule.access_level
                         }
                     }
                     return {
@@ -86,6 +91,12 @@ export const propertyAccessControlLogic = kea([
                 setLocalRoleOverride: (state, { roleId, level }) =>
                     state ? { ...state, roleOverrides: { ...state.roleOverrides, [roleId]: level } } : state,
                 resetLocalState: () => null,
+            },
+        ],
+        activeTab: [
+            'members' as string,
+            {
+                setActiveTab: (_, { tab }) => tab,
             },
         ],
     }),
@@ -104,7 +115,7 @@ export const propertyAccessControlLogic = kea([
             () => [membersLogic.selectors.members],
             (members): { id: string; first_name: string; last_name: string; email: string }[] =>
                 (members ?? []).map((member: any) => ({
-                    id: String(member.id),
+                    id: member.id,
                     first_name: member.user?.first_name ?? '',
                     last_name: member.user?.last_name ?? '',
                     email: member.user?.email ?? '',
@@ -114,10 +125,10 @@ export const propertyAccessControlLogic = kea([
             () => [rolesLogic.selectors.roles],
             (roles): { id: string; name: string; members: any[] }[] =>
                 (roles ?? []).map((role: any) => ({
-                    id: String(role.id),
+                    id: role.id,
                     name: role.name,
                     members: (role.members ?? []).map((m: any) => ({
-                        id: String(m.id),
+                        id: m.id,
                         first_name: m.user?.first_name ?? '',
                         last_name: m.user?.last_name ?? '',
                         email: m.user?.email ?? '',
@@ -139,9 +150,9 @@ export const propertyAccessControlLogic = kea([
                 const remoteRoleOverrides: Record<string, string> = {}
                 for (const rule of remoteState.access_controls) {
                     if (rule.organization_member) {
-                        remoteMemberOverrides[String(rule.organization_member)] = rule.access_level
+                        remoteMemberOverrides[rule.organization_member] = rule.access_level
                     } else if (rule.role) {
-                        remoteRoleOverrides[String(rule.role)] = rule.access_level
+                        remoteRoleOverrides[rule.role] = rule.access_level
                     }
                 }
                 // Check member overrides
@@ -178,11 +189,12 @@ export const propertyAccessControlLogic = kea([
             if (!values.localState || !values.remoteState) {
                 return
             }
-            const endpoint = `api/projects/${props.teamId}/property_definitions/${props.propertyDefinitionId}/property_access_controls/`
+            const endpoint = `api/projects/${props.teamId}/property_access_controls/`
 
             // Save default level if changed
             if (values.localState.defaultLevel !== values.remoteState.default_access_level) {
                 await api.create(endpoint, {
+                    property_definition_id: props.propertyDefinitionId,
                     access_level: values.localState.defaultLevel,
                 })
             }
@@ -192,9 +204,9 @@ export const propertyAccessControlLogic = kea([
             const remoteRoleOverrides: Record<string, string> = {}
             for (const rule of values.remoteState.access_controls) {
                 if (rule.organization_member) {
-                    remoteMemberOverrides[String(rule.organization_member)] = rule.access_level
+                    remoteMemberOverrides[rule.organization_member] = rule.access_level
                 } else if (rule.role) {
-                    remoteRoleOverrides[String(rule.role)] = rule.access_level
+                    remoteRoleOverrides[rule.role] = rule.access_level
                 }
             }
 
@@ -203,6 +215,7 @@ export const propertyAccessControlLogic = kea([
                 const remoteLevel = remoteMemberOverrides[memberId] ?? undefined
                 if (level !== remoteLevel) {
                     await api.create(endpoint, {
+                        property_definition_id: props.propertyDefinitionId,
                         access_level: level,
                         organization_member: memberId,
                     })
@@ -212,6 +225,7 @@ export const propertyAccessControlLogic = kea([
             for (const memberId of Object.keys(remoteMemberOverrides)) {
                 if (values.localState.memberOverrides[memberId] === null) {
                     await api.create(endpoint, {
+                        property_definition_id: props.propertyDefinitionId,
                         access_level: null,
                         organization_member: memberId,
                     })
@@ -223,6 +237,7 @@ export const propertyAccessControlLogic = kea([
                 const remoteLevel = remoteRoleOverrides[roleId] ?? undefined
                 if (level !== remoteLevel) {
                     await api.create(endpoint, {
+                        property_definition_id: props.propertyDefinitionId,
                         access_level: level,
                         role: roleId,
                     })
@@ -232,6 +247,7 @@ export const propertyAccessControlLogic = kea([
             for (const roleId of Object.keys(remoteRoleOverrides)) {
                 if (values.localState.roleOverrides[roleId] === null) {
                     await api.create(endpoint, {
+                        property_definition_id: props.propertyDefinitionId,
                         access_level: null,
                         role: roleId,
                     })

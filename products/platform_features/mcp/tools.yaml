@@ -374,3 +374,9 @@ tools:
     role-memberships-destroy:
         operation: roles_role_memberships_destroy
         enabled: false
+    property-access-controls-list:
+        operation: property_access_controls_list
+        enabled: false
+    property-access-controls-create:
+        operation: property_access_controls_create
+        enabled: false
