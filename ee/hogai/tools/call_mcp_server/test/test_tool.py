@@ -10,7 +10,7 @@ from asgiref.sync import sync_to_async
 from langchain_core.runnables import RunnableConfig
 from parameterized import parameterized
 
-from products.mcp_store.backend.models import MCPServer, MCPServerInstallation, MCPServerInstallationTool
+from products.mcp_store.backend.models import MCPServerInstallation, MCPServerInstallationTool
 from products.mcp_store.backend.oauth import TokenRefreshError
 
 from ee.hogai.context.context import AssistantContextManager
@@ -38,13 +38,10 @@ class TestCallMCPServerTool(BaseTest):
         url="https://mcp.example.com/mcp",
         auth_type="api_key",
         sensitive_configuration=None,
-        **server_kwargs,
     ):
-        server = MCPServer.objects.create(name=name, url=url, **server_kwargs)
         return MCPServerInstallation.objects.create(
             team=self.team,
             user=self.user,
-            server=server,
             display_name=name,
             url=url,
             auth_type=auth_type,
@@ -115,11 +112,9 @@ class TestCreateToolClass(TestCallMCPServerTool):
         other_user = await sync_to_async(User.objects.create_and_join)(
             self.organization, "other@example.com", "password"
         )
-        server = await sync_to_async(MCPServer.objects.create)(name="Other Server", url="https://mcp.other.com")
         await sync_to_async(MCPServerInstallation.objects.create)(
             team=self.team,
             user=other_user,
-            server=server,
             display_name="Other Server",
             url="https://mcp.other.com",
         )

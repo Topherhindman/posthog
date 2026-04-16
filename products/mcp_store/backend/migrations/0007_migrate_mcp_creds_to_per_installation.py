@@ -125,4 +125,26 @@ class Migration(migrations.Migration):
             seed_templates_and_backfill_installations,
             reverse_code=reverse_noop,
         ),
+        # Phase 1: drop the legacy `server` FKs from Django's state only. The
+        # DB columns stay (server_id on both tables) so the previous deploy
+        # — which still has the field in its ORM — continues to work during
+        # the rolling deploy. Phase 2 (migration 0008, follow-up PR) DROPs
+        # the columns and the mcp_store_mcpserver table entirely.
+        #
+        # The columns are already nullable (declared null=True since 0006),
+        # so new inserts from the post-this-migration code path work without
+        # a DEFAULT.
+        migrations.SeparateDatabaseAndState(
+            state_operations=[
+                migrations.RemoveField(
+                    model_name="mcpserverinstallation",
+                    name="server",
+                ),
+                migrations.RemoveField(
+                    model_name="mcpoauthstate",
+                    name="server",
+                ),
+            ],
+            database_operations=[],
+        ),
     ]

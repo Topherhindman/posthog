@@ -149,9 +149,6 @@ class MCPServerViewSet(TeamAndOrgViewSetMixin, mixins.ListModelMixin, viewsets.G
 
 class MCPServerInstallationSerializer(serializers.ModelSerializer):
     template_id = serializers.UUIDField(source="template.id", read_only=True, allow_null=True, default=None)
-    # Legacy field preserved for frontend backwards compatibility while we
-    # transition to template_id. Always serializes as null on new installations.
-    server_id = serializers.SerializerMethodField()
     needs_reauth = serializers.SerializerMethodField()
     pending_oauth = serializers.SerializerMethodField()
     name = serializers.SerializerMethodField()
@@ -162,7 +159,6 @@ class MCPServerInstallationSerializer(serializers.ModelSerializer):
         fields = [
             "id",
             "template_id",
-            "server_id",
             "name",
             "display_name",
             "url",
@@ -175,19 +171,13 @@ class MCPServerInstallationSerializer(serializers.ModelSerializer):
             "created_at",
             "updated_at",
         ]
-        read_only_fields = ["id", "template_id", "server_id", "created_at", "updated_at"]
-
-    def get_server_id(self, obj: MCPServerInstallation) -> str | None:
-        # Kept around for the old frontend; new code reads template_id.
-        return str(obj.server_id) if obj.server_id else None
+        read_only_fields = ["id", "template_id", "created_at", "updated_at"]
 
     def get_name(self, obj: MCPServerInstallation) -> str:
         if obj.display_name:
             return obj.display_name
         if obj.template:
             return obj.template.name
-        if obj.server:
-            return obj.server.name
         return ""
 
     def get_needs_reauth(self, obj: MCPServerInstallation) -> bool:
@@ -343,7 +333,7 @@ class MCPServerInstallationViewSet(TeamAndOrgViewSetMixin, viewsets.ModelViewSet
     def safely_get_queryset(self, queryset: QuerySet) -> QuerySet:
         return (
             queryset.filter(team_id=self.team_id, user=self.request.user)
-            .select_related("template", "server")
+            .select_related("template")
             .order_by("-created_at")
         )
 
@@ -744,9 +734,20 @@ class MCPServerInstallationViewSet(TeamAndOrgViewSetMixin, viewsets.ModelViewSet
         installation.oauth_metadata = metadata
 
         sensitive = dict(installation.sensitive_configuration or {})
+        if not created:
+            # Re-install replaces the per-user DCR client, which invalidates any
+            # tokens that were minted against the old client. Drop them and flag
+            # the installation as needing reauth until the new callback completes,
+            # so the UI + agent see pending_oauth=True in the interim.
+            for stale_key in ("access_token", "refresh_token", "token_retrieved_at", "expires_in"):
+                sensitive.pop(stale_key, None)
+            sensitive["needs_reauth"] = True
         sensitive["dcr_client_id"] = client_id
         sensitive["dcr_is_user_provided"] = dcr_is_user_provided
-        if user_client_secret:
+        # Only persist a client_secret if we also trusted the user-supplied
+        # client_id. A stray client_secret paired with a DCR-minted client_id
+        # would never validate, so discard it.
+        if dcr_is_user_provided and user_client_secret:
             sensitive["dcr_client_secret"] = user_client_secret
         else:
             sensitive.pop("dcr_client_secret", None)
@@ -1034,8 +1035,6 @@ def _installation_name(installation: MCPServerInstallation) -> str:
         return installation.display_name
     if installation.template:
         return installation.template.name
-    if installation.server:
-        return installation.server.name
     return installation.url
 
 
@@ -1172,8 +1171,8 @@ class MCPOAuthRedirectViewSet(viewsets.ViewSet):
         token_hash = _hash_oauth_state_token(state_token)
         now = timezone.now()
         with transaction.atomic():
-            # Lock only the oauth_state row. `server` and `template` are both nullable,
-            # which turns select_related joins into LEFT OUTER JOINs — Postgres rejects
+            # Lock only the oauth_state row. `template` is nullable, so the
+            # select_related join is a LEFT OUTER JOIN — Postgres rejects
             # FOR UPDATE on the nullable side of an outer join, so scope the lock with `of=`.
             oauth_state = (
                 MCPOAuthState.objects.select_for_update(of=("self",))

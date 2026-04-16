@@ -10,7 +10,7 @@ from parameterized import parameterized
 from rest_framework import status
 from rest_framework.test import APIClient
 
-from products.mcp_store.backend.models import MCPOAuthState, MCPServer, MCPServerInstallation, MCPServerTemplate
+from products.mcp_store.backend.models import MCPOAuthState, MCPServerInstallation, MCPServerTemplate
 from products.mcp_store.backend.presentation.views import _is_valid_posthog_code_callback_url
 
 ALLOW_URL = patch("products.mcp_store.backend.presentation.views.is_url_allowed", return_value=(True, None))
@@ -88,15 +88,6 @@ class TestMCPServerAPI(ClickhouseTestMixin, APIBaseTest, QueryMatchingTest):
 
 
 class TestMCPServerInstallationAPI(ClickhouseTestMixin, APIBaseTest, QueryMatchingTest):
-    def _create_server(self, **kwargs) -> MCPServer:
-        defaults = {
-            "name": "Test Server",
-            "url": "https://mcp.example.com",
-            "created_by": self.user,
-        }
-        defaults.update(kwargs)
-        return MCPServer.objects.create(**defaults)
-
     def test_create_not_allowed(self):
         response = self.client.post(
             f"/api/environments/{self.team.id}/mcp_server_installations/",
@@ -106,13 +97,11 @@ class TestMCPServerInstallationAPI(ClickhouseTestMixin, APIBaseTest, QueryMatchi
         assert response.status_code == status.HTTP_405_METHOD_NOT_ALLOWED
 
     def test_list_installations(self):
-        server = self._create_server()
-        MCPServerInstallation.objects.create(
+        installation = MCPServerInstallation.objects.create(
             team=self.team,
             user=self.user,
-            server=server,
-            display_name=server.name,
-            url=server.url,
+            display_name="Test Server",
+            url="https://mcp.example.com",
             auth_type="api_key",
         )
 
@@ -120,16 +109,15 @@ class TestMCPServerInstallationAPI(ClickhouseTestMixin, APIBaseTest, QueryMatchi
         assert response.status_code == status.HTTP_200_OK
         results = response.json()["results"]
         assert len(results) == 1
-        assert results[0]["server_id"] == str(server.id)
+        assert results[0]["id"] == str(installation.id)
+        assert results[0]["name"] == "Test Server"
 
     def test_uninstall_server(self):
-        server = self._create_server()
         installation = MCPServerInstallation.objects.create(
             team=self.team,
             user=self.user,
-            server=server,
-            display_name=server.name,
-            url=server.url,
+            display_name="Test Server",
+            url="https://mcp.example.com",
             auth_type="api_key",
         )
 
@@ -204,13 +192,11 @@ class TestMCPServerInstallationAPI(ClickhouseTestMixin, APIBaseTest, QueryMatchi
         assert by_name["Disabled Server"]["is_enabled"] is False
 
     def test_user_isolation(self):
-        server = self._create_server()
         MCPServerInstallation.objects.create(
             team=self.team,
             user=self.user,
-            server=server,
-            display_name=server.name,
-            url=server.url,
+            display_name="Test Server",
+            url="https://mcp.example.com",
             auth_type="api_key",
         )
 
@@ -220,8 +206,7 @@ class TestMCPServerInstallationAPI(ClickhouseTestMixin, APIBaseTest, QueryMatchi
         other_installation = MCPServerInstallation.objects.create(
             team=self.team,
             user=other_user,
-            server=server,
-            display_name=server.name,
+            display_name="Test Server",
             url="https://mcp2.example.com",
             auth_type="api_key",
         )
@@ -231,20 +216,6 @@ class TestMCPServerInstallationAPI(ClickhouseTestMixin, APIBaseTest, QueryMatchi
         results = response.json()["results"]
         assert len(results) == 1
         assert results[0]["id"] != str(other_installation.id)
-
-    def test_installation_without_server_has_null_server_id(self):
-        MCPServerInstallation.objects.create(
-            team=self.team,
-            user=self.user,
-            display_name="Custom",
-            url="https://mcp.custom.com",
-            auth_type="api_key",
-        )
-
-        response = self.client.get(f"/api/environments/{self.team.id}/mcp_server_installations/")
-        assert response.status_code == status.HTTP_200_OK
-        result = response.json()["results"][0]
-        assert result["server_id"] is None
 
 
 class TestInstallCustomAPI(ClickhouseTestMixin, APIBaseTest, QueryMatchingTest):
@@ -265,8 +236,6 @@ class TestInstallCustomAPI(ClickhouseTestMixin, APIBaseTest, QueryMatchingTest):
         assert response.json()["name"] == "My API Server"
         assert response.json()["url"] == "https://mcp.custom.com"
         assert response.json()["auth_type"] == "api_key"
-        assert response.json()["server_id"] is None
-        assert not MCPServer.objects.filter(url="https://mcp.custom.com").exists()
 
     @ALLOW_URL
     def test_install_custom_api_key_server_without_key(self, _mock):
@@ -277,7 +246,6 @@ class TestInstallCustomAPI(ClickhouseTestMixin, APIBaseTest, QueryMatchingTest):
         )
         assert response.status_code == status.HTTP_201_CREATED
         assert response.json()["auth_type"] == "api_key"
-        assert response.json()["server_id"] is None
 
     def test_install_custom_none_auth_type_rejected(self):
         response = self.client.post(
@@ -784,6 +752,130 @@ class TestOAuthIssuerSpoofingProtection(ClickhouseTestMixin, APIBaseTest, QueryM
         assert installation.sensitive_configuration["dcr_client_id"] == "per-user-dcr-client"
         # EncryptedJSONField stringifies leaf values on round-trip; accept either bool or str.
         assert installation.sensitive_configuration["dcr_is_user_provided"] in (False, "False")
+
+    @ALLOW_URL
+    @patch("products.mcp_store.backend.presentation.views.register_dcr_client")
+    @patch("products.mcp_store.backend.presentation.views.discover_oauth_metadata")
+    def test_install_custom_with_user_supplied_creds_skips_dcr(self, mock_discover, mock_dcr, _allow):
+        """If the user provides client_id + client_secret we trust them and skip DCR."""
+        mock_discover.return_value = {
+            "issuer": "https://auth.legit.com",
+            "authorization_endpoint": "https://auth.legit.com/authorize",
+            "token_endpoint": "https://auth.legit.com/token",
+            "registration_endpoint": "https://auth.legit.com/register",
+        }
+
+        response = self.client.post(
+            f"/api/environments/{self.team.id}/mcp_server_installations/install_custom/",
+            data={
+                "name": "Legit",
+                "url": "https://mcp.legit.com/mcp",
+                "auth_type": "oauth",
+                "client_id": "user-supplied-client-id",
+                "client_secret": "user-supplied-secret",
+            },
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK
+        mock_dcr.assert_not_called()
+
+        installation = MCPServerInstallation.objects.get(url="https://mcp.legit.com/mcp", user=self.user)
+        sensitive = installation.sensitive_configuration
+        assert sensitive["dcr_client_id"] == "user-supplied-client-id"
+        assert sensitive["dcr_client_secret"] == "user-supplied-secret"
+        # EncryptedJSONField stringifies leaf values on round-trip; accept either bool or str.
+        assert sensitive["dcr_is_user_provided"] in (True, "True")
+
+        params = parse_qs(urlparse(response.json()["redirect_url"]).query)
+        assert params["client_id"][0] == "user-supplied-client-id"
+
+    @ALLOW_URL
+    @patch("products.mcp_store.backend.presentation.views.register_dcr_client")
+    @patch("products.mcp_store.backend.presentation.views.discover_oauth_metadata")
+    def test_install_custom_discards_secret_when_client_id_missing(self, mock_discover, mock_dcr, _allow):
+        """A stray client_secret without a client_id falls back to DCR and the secret is dropped.
+
+        Storing it would pair a DCR-minted client_id with an unrelated secret —
+        token exchange would fail in confusing ways.
+        """
+        mock_discover.return_value = {
+            "issuer": "https://auth.legit.com",
+            "authorization_endpoint": "https://auth.legit.com/authorize",
+            "token_endpoint": "https://auth.legit.com/token",
+            "registration_endpoint": "https://auth.legit.com/register",
+        }
+        mock_dcr.return_value = "dcr-minted-client"
+
+        response = self.client.post(
+            f"/api/environments/{self.team.id}/mcp_server_installations/install_custom/",
+            data={
+                "name": "Legit",
+                "url": "https://mcp.legit.com/mcp",
+                "auth_type": "oauth",
+                "client_secret": "orphan-secret",
+            },
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK
+        mock_dcr.assert_called_once()
+
+        installation = MCPServerInstallation.objects.get(url="https://mcp.legit.com/mcp", user=self.user)
+        sensitive = installation.sensitive_configuration
+        assert sensitive["dcr_client_id"] == "dcr-minted-client"
+        assert "dcr_client_secret" not in sensitive
+        assert sensitive["dcr_is_user_provided"] in (False, "False")
+
+    @ALLOW_URL
+    @patch("products.mcp_store.backend.presentation.views.register_dcr_client", return_value="new-dcr-client")
+    @patch("products.mcp_store.backend.presentation.views.discover_oauth_metadata")
+    def test_reinstall_clears_stale_tokens_and_flags_reauth(self, mock_discover, _mock_dcr, _allow):
+        """Re-running install_custom swaps the DCR client; stale tokens from the old client must be cleared.
+
+        Otherwise the UI + agent would see the installation as still connected
+        (via the old access_token) and the first refresh would fail with
+        invalid_client against the new DCR client.
+        """
+        mock_discover.return_value = {
+            "issuer": "https://auth.legit.com",
+            "authorization_endpoint": "https://auth.legit.com/authorize",
+            "token_endpoint": "https://auth.legit.com/token",
+            "registration_endpoint": "https://auth.legit.com/register",
+        }
+
+        installation = MCPServerInstallation.objects.create(
+            team=self.team,
+            user=self.user,
+            url="https://mcp.legit.com/mcp",
+            display_name="Legit",
+            auth_type="oauth",
+            oauth_issuer_url="https://auth.legit.com",
+            oauth_metadata={
+                "authorization_endpoint": "https://auth.legit.com/authorize",
+                "token_endpoint": "https://auth.legit.com/token",
+            },
+            sensitive_configuration={
+                "dcr_client_id": "old-dcr-client",
+                "dcr_is_user_provided": False,
+                "access_token": "old-access-token",
+                "refresh_token": "old-refresh-token",
+                "token_retrieved_at": 1_700_000_000,
+                "expires_in": 3600,
+            },
+        )
+
+        response = self.client.post(
+            f"/api/environments/{self.team.id}/mcp_server_installations/install_custom/",
+            data={"name": "Legit", "url": "https://mcp.legit.com/mcp", "auth_type": "oauth"},
+            format="json",
+        )
+        assert response.status_code == status.HTTP_200_OK
+
+        installation.refresh_from_db()
+        sensitive = installation.sensitive_configuration
+        assert sensitive["dcr_client_id"] == "new-dcr-client"
+        assert sensitive["needs_reauth"] in (True, "True")
+        for stale_key in ("access_token", "refresh_token", "token_retrieved_at", "expires_in"):
+            assert stale_key not in sensitive, f"{stale_key} should have been cleared on re-install"
 
     @ALLOW_URL
     @patch("products.mcp_store.backend.presentation.views.discover_oauth_metadata")

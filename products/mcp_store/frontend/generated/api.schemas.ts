@@ -22,8 +22,6 @@ export interface MCPServerInstallationApi {
     readonly id: string
     /** @nullable */
     readonly template_id: string | null
-    /** @nullable */
-    readonly server_id: string | null
     readonly name: string
     /** @maxLength 200 */
     display_name?: string
