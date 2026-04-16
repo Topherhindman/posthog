@@ -14195,7 +14195,8 @@ export namespace Schemas {
     }
 
     export interface ErrorTrackingFingerprint {
-      fingerprint: string;
+      readonly id: string;
+      readonly fingerprint: string;
       readonly issue_id: string;
       readonly created_at: string;
     }
@@ -24175,15 +24176,6 @@ export namespace Schemas {
       disabled_data?: unknown | null;
       readonly created_at?: string;
       readonly updated_at?: string;
-    }
-
-    export interface PatchedErrorTrackingExternalReference {
-      readonly id?: string;
-      readonly integration?: ErrorTrackingExternalReferenceIntegration;
-      integration_id?: number;
-      config?: unknown;
-      issue?: string;
-      readonly external_url?: string;
     }
 
     /**
