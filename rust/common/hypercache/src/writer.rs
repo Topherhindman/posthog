@@ -83,7 +83,10 @@ impl HyperCacheWriter {
             warn!("System clock before UNIX_EPOCH; skipping expiry tracking");
             return;
         };
-        let expiry_timestamp = now.as_secs().saturating_add(ttl_seconds) as i64;
+        // Clamp to i64::MAX so a pathological u64 (e.g. extremely large ttl_seconds) can't wrap
+        // to a negative Redis sorted-set score. saturating_add already prevents u64 overflow.
+        let expiry_timestamp =
+            i64::try_from(now.as_secs().saturating_add(ttl_seconds)).unwrap_or(i64::MAX);
         let identifier = self.config.get_cache_identifier(key);
 
         if let Err(e) = self
@@ -144,6 +147,7 @@ impl HyperCacheWriter {
         });
 
         self.check_results(redis_result, s3_result, "set_with_etag")?;
+        self.track_expiry(key, ttl_seconds).await;
         Ok(etag)
     }
 
@@ -462,6 +466,40 @@ mod tests {
         let etag = writer.set_with_etag(&key, json_data, 604800).await.unwrap();
 
         assert_eq!(etag, compute_etag(json_data));
+    }
+
+    #[cfg(feature = "mock-client")]
+    #[tokio::test]
+    async fn test_set_with_etag_tracks_expiry_when_sorted_set_configured() {
+        let key = KeyType::int(123);
+        let json_data = r#"{"flags":[]}"#;
+
+        let mut redis = MockRedisClient::new();
+        redis.set_ret("posthog:1:cache/teams/123/feature_flags/flags.json", Ok(()));
+        redis.set_ret(
+            "posthog:1:cache/teams/123/feature_flags/flags.json:etag",
+            Ok(()),
+        );
+
+        let redis = Arc::new(redis);
+        let mut config = create_test_config();
+        config.expiry_sorted_set_key = Some("flags_cache_expiry".to_string());
+        let writer = HyperCacheWriter::new(redis.clone(), Arc::new(mock_s3_put_ok()), config);
+        writer.set_with_etag(&key, json_data, 604800).await.unwrap();
+
+        let calls = redis.get_calls();
+        let zadd_call = calls
+            .iter()
+            .find(|c| c.op == "zadd")
+            .expect("expected zadd call for expiry tracking");
+        assert_eq!(zadd_call.key, "flags_cache_expiry");
+        match &zadd_call.value {
+            MockRedisValue::MemberScore(member, score) => {
+                assert_eq!(member, "123");
+                assert!(*score > 604800, "score {score} looked too small");
+            }
+            other => panic!("expected MemberScore, got {other:?}"),
+        }
     }
 
     #[cfg(feature = "mock-client")]

@@ -533,18 +533,27 @@ fn read_team_ids_from_stdin() -> Vec<TeamId> {
     use std::io::BufRead;
     tracing::info!("Reading team IDs from stdin");
     let stdin = std::io::stdin();
-    let ids: Vec<TeamId> = stdin
-        .lock()
-        .lines()
-        .map_while(Result::ok)
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| {
-            line.trim().parse::<TeamId>().unwrap_or_else(|_| {
+    let mut ids: Vec<TeamId> = Vec::new();
+    for line in stdin.lock().lines() {
+        let line = match line {
+            Ok(line) => line,
+            Err(e) => {
+                tracing::error!(error = %e, "Failed to read team IDs from stdin");
+                std::process::exit(1);
+            }
+        };
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        match trimmed.parse::<TeamId>() {
+            Ok(id) => ids.push(id),
+            Err(_) => {
                 tracing::error!("Invalid team ID: {line}");
                 std::process::exit(1);
-            })
-        })
-        .collect();
+            }
+        }
+    }
     tracing::info!("Read {} team IDs from stdin", ids.len());
     ids
 }
