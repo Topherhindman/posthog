@@ -1,1 +1,1 @@
-0003_alter_logsalertconfiguration_state
+0004_rename_logsalertcheck_logsalertevent
