@@ -20313,6 +20313,9 @@
                 "s3TableUseInvalidColumns": {
                     "type": "boolean"
                 },
+                "sessionBufferDays": {
+                    "type": "number"
+                },
                 "sessionTableVersion": {
                     "enum": ["auto", "v1", "v2", "v3"],
                     "type": "string"
