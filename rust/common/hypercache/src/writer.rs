@@ -5,6 +5,7 @@ use common_s3::S3Client;
 use sha2::{Digest, Sha256};
 use std::fmt::Write;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::warn;
 
 use crate::{HyperCacheConfig, HyperCacheError, KeyType, HYPER_CACHE_EMPTY_VALUE};
@@ -66,7 +67,36 @@ impl HyperCacheWriter {
             warn!(error = %e, "Failed to delete ETag key during set");
         }
 
-        self.check_results(redis_result, s3_result, "set")
+        self.check_results(redis_result, s3_result, "set")?;
+        self.track_expiry(key, ttl_seconds).await;
+        Ok(())
+    }
+
+    /// Mirror Python's `HyperCache._track_expiry`: record the write into the configured
+    /// sorted set with `now + ttl_seconds` as the score. Failures are logged but never
+    /// propagate — the cache entry itself was already written successfully.
+    async fn track_expiry(&self, key: &KeyType, ttl_seconds: u64) {
+        let Some(sorted_set_key) = self.config.expiry_sorted_set_key.as_deref() else {
+            return;
+        };
+        let Ok(now) = SystemTime::now().duration_since(UNIX_EPOCH) else {
+            warn!("System clock before UNIX_EPOCH; skipping expiry tracking");
+            return;
+        };
+        let expiry_timestamp = now.as_secs().saturating_add(ttl_seconds) as i64;
+        let identifier = self.config.get_cache_identifier(key);
+
+        if let Err(e) = self
+            .redis_client
+            .zadd(sorted_set_key.to_string(), identifier, expiry_timestamp)
+            .await
+        {
+            warn!(
+                error = %e,
+                namespace = %self.config.namespace,
+                "Failed to track cache expiry",
+            );
+        }
     }
 
     /// Write JSON data to both Redis and S3, and store a computed ETag in Redis.
@@ -353,6 +383,44 @@ mod tests {
             etag_del.key,
             "posthog:1:cache/teams/123/feature_flags/flags.json:etag"
         );
+        // No expiry tracking when `expiry_sorted_set_key` is None.
+        assert!(calls.iter().all(|c| c.op != "zadd"));
+    }
+
+    #[cfg(feature = "mock-client")]
+    #[tokio::test]
+    async fn test_set_tracks_expiry_when_sorted_set_configured() {
+        let key = KeyType::int(123);
+        let json_data = r#"{"flags":[]}"#;
+
+        let mut redis = MockRedisClient::new();
+        redis.set_ret("posthog:1:cache/teams/123/feature_flags/flags.json", Ok(()));
+        redis.del_ret(
+            "posthog:1:cache/teams/123/feature_flags/flags.json:etag",
+            Ok(()),
+        );
+
+        let redis = Arc::new(redis);
+        let mut config = create_test_config();
+        config.expiry_sorted_set_key = Some("flags_cache_expiry".to_string());
+        let writer = HyperCacheWriter::new(redis.clone(), Arc::new(mock_s3_put_ok()), config);
+        writer.set(&key, json_data, 604800).await.unwrap();
+
+        let calls = redis.get_calls();
+        let zadd_call = calls
+            .iter()
+            .find(|c| c.op == "zadd")
+            .expect("expected zadd call for expiry tracking");
+        assert_eq!(zadd_call.key, "flags_cache_expiry");
+        match &zadd_call.value {
+            MockRedisValue::MemberScore(member, score) => {
+                assert_eq!(member, "123");
+                // Score is a future unix timestamp (now + 604800s); just sanity-check it's
+                // at least our ttl seconds ahead.
+                assert!(*score > 604800, "score {score} looked too small");
+            }
+            other => panic!("expected MemberScore, got {other:?}"),
+        }
     }
 
     #[cfg(feature = "mock-client")]
