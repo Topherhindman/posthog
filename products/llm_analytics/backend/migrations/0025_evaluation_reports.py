@@ -9,7 +9,7 @@ import posthog.models.utils
 class Migration(migrations.Migration):
     dependencies = [
         ("posthog", "1043_add_15_minute_interval_to_batch_exports"),
-        ("llm_analytics", "0022_reviewqueue_reviewqueueitem_and_more"),
+        ("llm_analytics", "0024_evaluation_status_backfill"),
         migrations.swappable_dependency(settings.AUTH_USER_MODEL),
     ]
 
