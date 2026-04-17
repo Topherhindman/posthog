@@ -83,8 +83,7 @@ impl HyperCacheWriter {
             warn!("System clock before UNIX_EPOCH; skipping expiry tracking");
             return;
         };
-        // Clamp to i64::MAX so a pathological u64 (e.g. extremely large ttl_seconds) can't wrap
-        // to a negative Redis sorted-set score. saturating_add already prevents u64 overflow.
+        // Clamp so `as i64` can't wrap to a negative Redis sorted-set score on extreme ttls.
         let expiry_timestamp =
             i64::try_from(now.as_secs().saturating_add(ttl_seconds)).unwrap_or(i64::MAX);
         let identifier = self.config.get_cache_identifier(key);
@@ -392,6 +391,29 @@ mod tests {
     }
 
     #[cfg(feature = "mock-client")]
+    fn assert_zadd_tracked_expiry(
+        calls: &[common_redis::MockRedisCall],
+        sorted_set_key: &str,
+        member: &str,
+        min_score: i64,
+    ) {
+        let zadd_call = calls
+            .iter()
+            .find(|c| c.op == "zadd")
+            .expect("expected zadd call for expiry tracking");
+        assert_eq!(zadd_call.key, sorted_set_key);
+        match &zadd_call.value {
+            MockRedisValue::MemberScore(m, score) => {
+                assert_eq!(m, member);
+                // Score is a future unix timestamp (now + ttl_seconds); sanity-check it's
+                // at least our ttl seconds ahead.
+                assert!(*score > min_score, "score {score} looked too small");
+            }
+            other => panic!("expected MemberScore, got {other:?}"),
+        }
+    }
+
+    #[cfg(feature = "mock-client")]
     #[tokio::test]
     async fn test_set_tracks_expiry_when_sorted_set_configured() {
         let key = KeyType::int(123);
@@ -410,21 +432,7 @@ mod tests {
         let writer = HyperCacheWriter::new(redis.clone(), Arc::new(mock_s3_put_ok()), config);
         writer.set(&key, json_data, 604800).await.unwrap();
 
-        let calls = redis.get_calls();
-        let zadd_call = calls
-            .iter()
-            .find(|c| c.op == "zadd")
-            .expect("expected zadd call for expiry tracking");
-        assert_eq!(zadd_call.key, "flags_cache_expiry");
-        match &zadd_call.value {
-            MockRedisValue::MemberScore(member, score) => {
-                assert_eq!(member, "123");
-                // Score is a future unix timestamp (now + 604800s); just sanity-check it's
-                // at least our ttl seconds ahead.
-                assert!(*score > 604800, "score {score} looked too small");
-            }
-            other => panic!("expected MemberScore, got {other:?}"),
-        }
+        assert_zadd_tracked_expiry(&redis.get_calls(), "flags_cache_expiry", "123", 604800);
     }
 
     #[cfg(feature = "mock-client")]
@@ -487,19 +495,7 @@ mod tests {
         let writer = HyperCacheWriter::new(redis.clone(), Arc::new(mock_s3_put_ok()), config);
         writer.set_with_etag(&key, json_data, 604800).await.unwrap();
 
-        let calls = redis.get_calls();
-        let zadd_call = calls
-            .iter()
-            .find(|c| c.op == "zadd")
-            .expect("expected zadd call for expiry tracking");
-        assert_eq!(zadd_call.key, "flags_cache_expiry");
-        match &zadd_call.value {
-            MockRedisValue::MemberScore(member, score) => {
-                assert_eq!(member, "123");
-                assert!(*score > 604800, "score {score} looked too small");
-            }
-            other => panic!("expected MemberScore, got {other:?}"),
-        }
+        assert_zadd_tracked_expiry(&redis.get_calls(), "flags_cache_expiry", "123", 604800);
     }
 
     #[cfg(feature = "mock-client")]
