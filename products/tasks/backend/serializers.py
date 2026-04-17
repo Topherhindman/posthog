@@ -699,6 +699,7 @@ class TaskRunCommandRequestSerializer(serializers.Serializer):
         "close",
         "permission_response",
         "set_config_option",
+        "shell_execute",
     ]
 
     jsonrpc = serializers.ChoiceField(
@@ -732,6 +733,30 @@ class TaskRunCommandRequestSerializer(serializers.Serializer):
             content = params.get("content")
             if not content or not isinstance(content, str) or not content.strip():
                 raise serializers.ValidationError({"params": "content is required and must be a non-empty string"})
+        if method == "shell_execute":
+            command = params.get("command")
+            if not command or not isinstance(command, str) or not command.strip():
+                raise serializers.ValidationError({"params": "command is required and must be a non-empty string"})
+            cwd = params.get("cwd")
+            if cwd is not None and not isinstance(cwd, str):
+                raise serializers.ValidationError({"params": "cwd must be a string"})
+            timeout_ms = params.get("timeoutMs")
+            if timeout_ms is not None:
+                if (
+                    not isinstance(timeout_ms, int)
+                    or isinstance(timeout_ms, bool)
+                    or timeout_ms <= 0
+                    or timeout_ms > 600_000
+                ):
+                    raise serializers.ValidationError(
+                        {"params": "timeoutMs must be a positive integer no greater than 600000"}
+                    )
+            execution_id = params.get("executionId")
+            if execution_id is not None:
+                if not isinstance(execution_id, str) or not execution_id.strip() or len(execution_id) > 128:
+                    raise serializers.ValidationError(
+                        {"params": "executionId must be a non-empty string no longer than 128 characters"}
+                    )
         return attrs
 
 
