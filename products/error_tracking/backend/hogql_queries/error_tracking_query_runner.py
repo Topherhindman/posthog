@@ -1,12 +1,22 @@
+import uuid
 import datetime
+from typing import Any
 from zoneinfo import ZoneInfo
 
 import structlog
+from rest_framework.exceptions import ValidationError
 
-from posthog.schema import CachedErrorTrackingQueryResponse, ErrorTrackingQuery, ErrorTrackingQueryResponse
+from posthog.schema import (
+    CachedErrorTrackingQueryResponse,
+    ErrorTrackingFingerprintIssueStateOverride,
+    ErrorTrackingIssueStatus,
+    ErrorTrackingQuery,
+    ErrorTrackingQueryResponse,
+)
 
 from posthog.hogql import ast
 from posthog.hogql.constants import LimitContext
+from posthog.hogql.context import HogQLContext
 
 from posthog.hogql_queries.insights.paginators import HogQLHasMorePaginator
 from posthog.hogql_queries.query_runner import AnalyticsQueryRunner
@@ -18,6 +28,9 @@ from products.error_tracking.backend.hogql_queries.error_tracking_query_runner_v
 from products.error_tracking.backend.hogql_queries.error_tracking_query_runner_v3 import ErrorTrackingQueryV3Builder
 
 logger = structlog.get_logger(__name__)
+
+MAX_FINGERPRINT_OVERRIDES = 500
+_VALID_STATUSES = {s.value for s in ErrorTrackingIssueStatus}
 
 
 class ErrorTrackingQueryRunner(AnalyticsQueryRunner[ErrorTrackingQueryResponse]):
@@ -78,6 +91,61 @@ class ErrorTrackingQueryRunner(AnalyticsQueryRunner[ErrorTrackingQueryResponse])
     def to_query(self) -> ast.SelectQuery:
         return self._builder.build_query()
 
+    @cached_property
+    def _sanitized_fingerprint_overrides(self) -> list[dict[str, Any]]:
+        """Validate + sanitize client-supplied fingerprint overrides.
+
+        team_id is always stamped from `self.team.id`, never trusted from the client.
+        """
+        raw = self.query.fingerprintIssueStateOverrides or []
+        if not raw:
+            return []
+        if len(raw) > MAX_FINGERPRINT_OVERRIDES:
+            raise ValidationError(f"fingerprintIssueStateOverrides exceeds limit of {MAX_FINGERPRINT_OVERRIDES} rows")
+
+        sanitized: list[dict[str, Any]] = []
+        for row in raw:
+            if not isinstance(row, ErrorTrackingFingerprintIssueStateOverride):
+                continue
+            try:
+                issue_uuid = uuid.UUID(row.issue_id)
+            except (ValueError, TypeError, AttributeError):
+                raise ValidationError(f"Invalid issue_id in fingerprint override: {row.issue_id!r}")
+
+            if row.issue_status not in _VALID_STATUSES:
+                raise ValidationError(f"Invalid issue_status in fingerprint override: {row.issue_status!r}")
+
+            assigned_role_id = None
+            if row.assigned_role_id is not None:
+                try:
+                    assigned_role_id = str(uuid.UUID(str(row.assigned_role_id)))
+                except (ValueError, TypeError):
+                    raise ValidationError(f"Invalid assigned_role_id in fingerprint override: {row.assigned_role_id!r}")
+
+            sanitized.append(
+                {
+                    "team_id": self.team.id,
+                    "fingerprint": str(row.fingerprint),
+                    "issue_id": str(issue_uuid),
+                    "issue_name": None if row.issue_name is None else str(row.issue_name),
+                    "issue_description": None if row.issue_description is None else str(row.issue_description),
+                    "issue_status": str(row.issue_status),
+                    "assigned_user_id": None if row.assigned_user_id is None else int(row.assigned_user_id),
+                    "assigned_role_id": assigned_role_id,
+                    "first_seen": str(row.first_seen),
+                    "is_deleted": int(row.is_deleted) if row.is_deleted is not None else 0,
+                    "version": int(row.version),
+                }
+            )
+        return sanitized
+
+    def _hogql_context(self) -> HogQLContext:
+        ctx = HogQLContext(team_id=self.team.pk, team=self.team, user=self.user, enable_select_queries=True)
+        overrides = self._sanitized_fingerprint_overrides
+        if overrides:
+            ctx.error_tracking_fingerprint_overrides = overrides
+        return ctx
+
     def _calculate(self):
         with self.timings.measure("error_tracking_query_hogql_execute"):
             query_result = self.paginator.execute_hogql_query(
@@ -89,6 +157,7 @@ class ErrorTrackingQueryRunner(AnalyticsQueryRunner[ErrorTrackingQueryResponse])
                 limit_context=self.limit_context,
                 filters=self._builder.hogql_filters(),
                 user=self.user,
+                context=self._hogql_context(),
             )
 
         columns: list[str] = query_result.columns or []

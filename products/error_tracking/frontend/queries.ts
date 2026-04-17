@@ -3,6 +3,7 @@ import {
     DateRange,
     DocumentSimilarityQuery,
     ErrorTrackingBreakdownsQuery,
+    ErrorTrackingFingerprintIssueStateOverride,
     ErrorTrackingIssueCorrelationQuery,
     ErrorTrackingQuery,
     ErrorTrackingSimilarIssuesQuery,
@@ -45,6 +46,7 @@ export const errorTrackingQuery = ({
     groupTypeIndex,
     limit = 50,
     useQueryV3,
+    fingerprintIssueStateOverrides,
 }: Pick<
     ErrorTrackingQuery,
     | 'orderBy'
@@ -63,6 +65,7 @@ export const errorTrackingQuery = ({
     filterGroup: UniversalFiltersGroup
     columns: string[]
     volumeResolution?: number
+    fingerprintIssueStateOverrides?: ErrorTrackingFingerprintIssueStateOverride[]
 }): DataTableNode => {
     return {
         kind: NodeKind.DataTableNode,
@@ -84,6 +87,10 @@ export const errorTrackingQuery = ({
             groupKey,
             groupTypeIndex,
             useQueryV3,
+            // Only V3 understands these; omit when empty so cache keys stay stable.
+            ...(fingerprintIssueStateOverrides && fingerprintIssueStateOverrides.length > 0
+                ? { fingerprintIssueStateOverrides }
+                : {}),
             tags: {
                 productKey: ProductKey.ERROR_TRACKING,
             },

@@ -2561,6 +2561,27 @@ export type CachedRevenueExampleDataWarehouseTablesQueryResponse =
 /** @title ErrorTrackingOrderBy */
 export type ErrorTrackingOrderBy = 'last_seen' | 'first_seen' | 'occurrences' | 'users' | 'sessions'
 
+/**
+ * Client-side override of a single denormalized fingerprint→issue state row. Used to hide
+ * the Kafka→ClickHouse sync lag immediately after a mutation (assign/status/name/etc.). The
+ * client sends one row per affected fingerprint; the backend UNIONs these into the argMax
+ * subquery with the provided version so argMax picks them. `team_id` is stamped server-side.
+ */
+export interface ErrorTrackingFingerprintIssueStateOverride {
+    fingerprint: string
+    issue_id: string
+    issue_name: string | null
+    issue_description: string | null
+    issue_status: string
+    assigned_user_id: integer | null
+    assigned_role_id: string | null
+    /** ISO 8601 datetime string. */
+    first_seen: string
+    is_deleted: integer
+    /** Client-stamped monotonic version (`Date.now()` ms at mutation success). */
+    version: integer
+}
+
 export interface ErrorTrackingQuery extends DataNode<ErrorTrackingQueryResponse> {
     kind: NodeKind.ErrorTrackingQuery
     /** Filter to a specific error tracking issue by ID. */
@@ -2592,6 +2613,11 @@ export interface ErrorTrackingQuery extends DataNode<ErrorTrackingQueryResponse>
     useQueryV2?: boolean
     /** Use V3 query path (denormalized ClickHouse table, no Postgres joins) */
     useQueryV3?: boolean
+    /**
+     * Client-side overrides to UNION into the denormalized fingerprint issue state subquery (V3 only).
+     * Used to hide Kafka→ClickHouse sync lag after mutations.
+     */
+    fingerprintIssueStateOverrides?: ErrorTrackingFingerprintIssueStateOverride[]
 }
 
 export interface ErrorTrackingSimilarIssuesQuery extends DataNode<ErrorTrackingSimilarIssuesQueryResponse> {
