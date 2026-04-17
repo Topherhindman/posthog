@@ -82,7 +82,7 @@ const errorTrackingGroupingRulesList = (): ToolBase<
         const projectId = await context.stateManager.getProjectId()
         const result = await context.api.request<Schemas.ErrorTrackingGroupingRuleListResponse>({
             method: 'GET',
-            path: `/api/environments/${projectId}/error_tracking/grouping_rules/`,
+            path: `/api/environments/${encodeURIComponent(String(projectId))}/error_tracking/grouping_rules/`,
         })
         return result
     },
@@ -110,7 +110,7 @@ const errorTrackingGroupingRulesCreate = (): ToolBase<
         }
         const result = await context.api.request<Schemas.ErrorTrackingGroupingRule>({
             method: 'POST',
-            path: `/api/environments/${projectId}/error_tracking/grouping_rules/`,
+            path: `/api/environments/${encodeURIComponent(String(projectId))}/error_tracking/grouping_rules/`,
             body,
         })
         return result
@@ -279,7 +279,7 @@ const errorTrackingSuppressionRulesList = (): ToolBase<
         const projectId = await context.stateManager.getProjectId()
         const result = await context.api.request<Schemas.PaginatedErrorTrackingSuppressionRuleList>({
             method: 'GET',
-            path: `/api/environments/${projectId}/error_tracking/suppression_rules/`,
+            path: `/api/environments/${encodeURIComponent(String(projectId))}/error_tracking/suppression_rules/`,
             query: {
                 limit: params.limit,
                 offset: params.offset,
