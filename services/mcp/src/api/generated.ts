@@ -20062,6 +20062,7 @@ export namespace Schemas {
     * `close` - close
     * `permission_response` - permission_response
     * `set_config_option` - set_config_option
+    * `shell_execute` - shell_execute
      */
     export type MethodEnum = typeof MethodEnum[keyof typeof MethodEnum];
 
@@ -20072,6 +20073,7 @@ export namespace Schemas {
       Close: 'close',
       PermissionResponse: 'permission_response',
       SetConfigOption: 'set_config_option',
+      ShellExecute: 'shell_execute',
     } as const;
 
     export interface MinimalPerson {
@@ -31886,7 +31888,8 @@ export namespace Schemas {
     * `cancel` - cancel
     * `close` - close
     * `permission_response` - permission_response
-    * `set_config_option` - set_config_option */
+    * `set_config_option` - set_config_option
+    * `shell_execute` - shell_execute */
       method: MethodEnum;
       /** Parameters for the command */
       params?: TaskRunCommandRequestParams;
